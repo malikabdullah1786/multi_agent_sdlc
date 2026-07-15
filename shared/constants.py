@@ -1,2 +1,3 @@
 # Shared Constants
-DEFAULT_AGENT_TIMEOUT = 300  # seconds
+DEFAULT_AGENT_TIMEOUT = 3000  # seconds
+
