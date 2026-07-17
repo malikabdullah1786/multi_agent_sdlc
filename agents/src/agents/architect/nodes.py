@@ -8,15 +8,15 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langgraph.types import interrupt
 from agents.src.agents.architect.state import ArchitectState
 from agents.src.agents.architect.tools import rag_search, validate_schema, lint_api_spec
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.1)  # Low temp for precise technical output
-_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
+_llm = ChatGroq(model="qwen/qwen3.6-27b", temperature=0.1, max_tokens=2500)  # Low temp for precise technical output
+_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 # ---------------------------------------------------------------------------
@@ -30,14 +30,13 @@ def research_node(state: ArchitectState) -> dict:
     """
     web_results: list[str] = []
     rag_results: list[str] = []
-    # Web search for technical references
+    # Web search for technical references (DuckDuckGo)
     try:
-        from langchain_community.tools.tavily_search import TavilySearchResults
-        tavily = TavilySearchResults(max_results=5)
-        tech_query = f"system architecture best practices {' '.join(state.recommended_tech_stack)} {state.project_type}"
-        raw = tavily.invoke(tech_query)
-        if isinstance(raw, list):
-            web_results = [r.get("content", "") for r in raw if isinstance(r, dict)]
+        from langchain_community.tools import DuckDuckGoSearchResults
+        ddg = DuckDuckGoSearchResults(max_results=5)
+        tech_query = f"system architecture best practices {state.project_type}"
+        raw = ddg.invoke(tech_query)
+        web_results = [str(raw)]
     except Exception as e:
         web_results = [f"Web search unavailable: {e}"]
     # Internal knowledge base search for past design docs and ADRs
@@ -67,7 +66,7 @@ def design_draft_node(state: ArchitectState) -> dict:
         web_search_results="\n\n".join(state.web_search_results) or "No web results.",
         rag_results="\n\n".join(state.rag_results) or "No past designs found.",
         constraints="\n".join(f"- {c}" for c in state.constraints) or "None.",
-        recommended_tech_stack=", ".join(state.recommended_tech_stack) or "Not specified.",
+
         schema_feedback=state.schema_feedback or "No schema feedback.",
         api_feedback=state.api_feedback or "No API feedback.",
         structure_feedback=state.structure_feedback or "No structure feedback.",

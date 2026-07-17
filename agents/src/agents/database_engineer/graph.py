@@ -18,7 +18,15 @@ from agents.src.agents.database_engineer.nodes import (
     write_migrations_node,
     execute_migrations_node,
     validate_schema_node,
+    pop_task_node,
+    mark_task_complete_node
 )
+
+# ---------------------------------------------------------------------------
+# Router: Is Queue Empty?
+# ---------------------------------------------------------------------------
+def _is_queue_empty(state: DatabaseEngineerState) -> str:
+    return "END" if state.current_task is None else "setup_db"
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +40,7 @@ def _should_revise_migrations(state: DatabaseEngineerState) -> str:
     max_iterations = 3
     if not state.db_schema_ready and state.iteration_count < max_iterations:
         return "write_migrations"
-    return END
+    return "mark_task_complete"
 
 
 # ---------------------------------------------------------------------------
@@ -41,13 +49,16 @@ def _should_revise_migrations(state: DatabaseEngineerState) -> str:
 workflow = StateGraph(DatabaseEngineerState)
 
 # Register all nodes
+workflow.add_node("pop_task", pop_task_node)
 workflow.add_node("setup_db", setup_db_node)
 workflow.add_node("write_migrations", write_migrations_node)
 workflow.add_node("execute_migrations", execute_migrations_node)
 workflow.add_node("validate_schema", validate_schema_node)
+workflow.add_node("mark_task_complete", mark_task_complete_node)
 
-# Linear execution
-workflow.add_edge(START, "setup_db")
+# Flow execution
+workflow.add_edge(START, "pop_task")
+workflow.add_conditional_edges("pop_task", _is_queue_empty, {"END": END, "setup_db": "setup_db"})
 workflow.add_edge("setup_db", "write_migrations")
 workflow.add_edge("write_migrations", "execute_migrations")
 workflow.add_edge("execute_migrations", "validate_schema")
@@ -58,8 +69,9 @@ workflow.add_conditional_edges(
     _should_revise_migrations,
     {
         "write_migrations": "write_migrations",
-        END: END
+        "mark_task_complete": "mark_task_complete"
     }
 )
+workflow.add_edge("mark_task_complete", "pop_task")
 
 database_engineer_subgraph = workflow.compile(checkpointer=MemorySaver())

@@ -1,10 +1,12 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class QAState(BaseModel):
     # ── Inputs from global state ──────────────────────────────────────────────
     prd: str = Field(description="Product Requirements Document (for expected behavior)")
     final_design_doc: str = Field(description="Architecture doc")
+    workflow_tasks: List[Dict[str, Any]] = Field(default_factory=list, description="Assigned tasks from the Task Breakdown Agent")
+    current_task: Optional[Dict[str, Any]] = Field(default=None, description="The task currently being executed")
     
     # ── Test Generation & Execution ────────────────────────────────────────────
     e2e_test_scripts: str = Field(default="", description="Generated automated test scripts")

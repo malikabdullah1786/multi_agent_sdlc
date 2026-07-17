@@ -6,8 +6,13 @@ Phase B tools: Jira MCP (Epic + Ticket creation), Slack MCP (Channel creation + 
 """
 from langchain_core.tools import tool
 from typing import List, Dict, Any
+import os
+import contextlib
+from dotenv import load_dotenv
 
-
+# Path to .env file relative to this script
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.env"))
+load_dotenv(env_path)
 # ---------------------------------------------------------------------------
 # RAG Search (Internal)
 # ---------------------------------------------------------------------------
@@ -56,11 +61,32 @@ def create_jira_epic(
     Returns:
         A dict with 'epic_key' and 'epic_url'.
     """
-    # TODO: Replace with actual Jira MCP call or Atlassian REST API:
-    # POST /rest/api/3/issue with issuetype: Epic
-    raise NotImplementedError(
-        "Connect Jira MCP server or implement Atlassian REST API client."
-    )
+    from jira import JIRA
+
+    jira_url = os.getenv("JIRA_URL")
+    user_email = os.getenv("JIRA_USER_EMAIL")
+    api_token = os.getenv("JIRA_API_TOKEN")
+
+    if not all([jira_url, user_email, api_token]):
+        raise ValueError("Missing Jira credentials in environment variables.")
+
+    jira = JIRA(server=jira_url, basic_auth=(user_email, api_token))
+
+    issue_dict = {
+        'project': {'key': project_key},
+        'summary': epic_name,
+        'description': description,
+        'issuetype': {'name': 'Epic'},
+    }
+
+    try:
+        new_issue = jira.create_issue(fields=issue_dict)
+        return {
+            "epic_key": new_issue.key,
+            "epic_url": f"{jira_url}/browse/{new_issue.key}"
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to create Jira Epic: {e}")
 
 
 @tool
@@ -81,51 +107,106 @@ def create_jira_tickets(
     Returns:
         A list of created Jira ticket keys.
     """
-    # TODO: Replace with actual Jira MCP call or Atlassian REST API:
-    # POST /rest/api/3/issue with issuetype: Story | Task, parent: epic_key
-    raise NotImplementedError(
-        "Connect Jira MCP server or implement Atlassian REST API client."
-    )
+    from jira import JIRA
+
+    jira_url = os.getenv("JIRA_URL")
+    user_email = os.getenv("JIRA_USER_EMAIL")
+    api_token = os.getenv("JIRA_API_TOKEN")
+
+    if not all([jira_url, user_email, api_token]):
+        raise ValueError("Missing Jira credentials in environment variables.")
+
+    jira = JIRA(server=jira_url, basic_auth=(user_email, api_token))
+
+    created_keys = []
+    for task in tasks:
+        issue_dict = {
+            'project': {'key': project_key},
+            'summary': f"[{task.get('assignee_role', 'Unassigned')}] {task.get('title', 'Task')}",
+            'description': f"{task.get('description', '')}\n\nTarget Files: {', '.join(task.get('target_files', []))}",
+            'issuetype': {'name': 'Task'},
+            # In Jira Server/DC it's 'customfield_10014' for Epic Link.
+            # In Jira Cloud, it's often 'parent': {'key': epic_key} or 'customfield_XXXXX'
+            'parent': {'key': epic_key}
+        }
+        try:
+            new_issue = jira.create_issue(fields=issue_dict)
+            created_keys.append(new_issue.key)
+        except Exception as e:
+            print(f"Failed to create task {task.get('title')}: {e}")
+            # Try falling back without parent key if it fails due to hierarchy mapping
+            try:
+                del issue_dict['parent']
+                issue_dict['description'] += f"\n\n(Intended Parent Epic: {epic_key})"
+                new_issue = jira.create_issue(fields=issue_dict)
+                created_keys.append(new_issue.key)
+            except Exception as inner_e:
+                print(f"Failed to create task even without parent: {inner_e}")
+
+    return created_keys
 
 
 # ---------------------------------------------------------------------------
-# Slack Tools (via Slack MCP or Slack Web API)
+# Slack Tools (via Official Slack SDK)
 # ---------------------------------------------------------------------------
 
 @tool
 def create_slack_channel(channel_name: str) -> dict:
     """
-    Creates a dedicated Slack channel for the project.
-
+    Creates a new public Slack channel for the project.
+    
     Args:
-        channel_name: Must be lowercase with hyphens (e.g. 'proj-uber-for-dogs').
-                      Max 80 characters, no spaces.
-
+        channel_name: The name of the channel to create (max 80 chars, lowercase, no spaces).
+        
     Returns:
         A dict with 'channel_id' and 'channel_name'.
     """
-    # TODO: Replace with Slack MCP call or Slack Web API:
-    # POST https://slack.com/api/conversations.create
-    raise NotImplementedError(
-        "Connect Slack MCP server or implement Slack Web API client."
-    )
+    from slack_sdk import WebClient
+    from slack_sdk.errors import SlackApiError
+
+    token = os.getenv("SLACK_BOT_TOKEN")
+    if not token:
+        raise ValueError("SLACK_BOT_TOKEN environment variable is not set.")
+
+    client = WebClient(token=token)
+    try:
+        response = client.conversations_create(name=channel_name)
+        return {
+            "channel_id": response["channel"]["id"],
+            "channel_name": response["channel"]["name"]
+        }
+    except SlackApiError as e:
+        if e.response["error"] == "name_taken":
+            # If taken, return the existing channel info by looking it up, or just fallback
+            # For simplicity, returning error string in dict
+            return {"error": f"Channel name {channel_name} is already taken.", "channel_name": channel_name}
+        raise RuntimeError(f"Failed to create Slack channel: {e.response['error']}")
 
 
 @tool
-def post_slack_message(channel_id: str, message: str, blocks: List[Dict] = None) -> dict:
+def post_slack_message(channel_id: str, message: str) -> dict:
     """
-    Posts a formatted message to a Slack channel.
-
+    Posts a message to a Slack channel.
+    
     Args:
-        channel_id: The Slack channel ID to post to.
-        message: Plain text fallback message.
-        blocks: Optional Slack Block Kit payload for rich formatting.
-
+        channel_id: The ID or name of the channel (e.g. '#general' or 'C12345').
+        message: The text content to post (supports Slack markdown).
+        
     Returns:
-        A dict with 'message_ts' (message timestamp for threading).
+        A dict with 'message_ts' (timestamp of the posted message).
     """
-    # TODO: Replace with Slack MCP call or Slack Web API:
-    # POST https://slack.com/api/chat.postMessage
-    raise NotImplementedError(
-        "Connect Slack MCP server or implement Slack Web API client."
-    )
+    from slack_sdk import WebClient
+    from slack_sdk.errors import SlackApiError
+
+    token = os.getenv("SLACK_BOT_TOKEN")
+    if not token:
+        raise ValueError("SLACK_BOT_TOKEN environment variable is not set.")
+
+    client = WebClient(token=token)
+    try:
+        response = client.chat_postMessage(channel=channel_id, text=message)
+        return {
+            "message_ts": response["ts"]
+        }
+    except SlackApiError as e:
+        raise RuntimeError(f"Failed to post Slack message: {e.response['error']}")

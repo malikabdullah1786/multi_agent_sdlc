@@ -8,7 +8,11 @@ PRD / Project Plan:
 
 Your System Design Document must be highly detailed and address the following topics:
 
-1. **System & Interaction Topology**:
+1. **Technology Stack & Deployment Strategy**:
+   - Select the most suitable frontend framework, backend framework, language, and database based on the PRD constraints.
+   - Recommend a deployment platform (e.g. AWS, Vercel, Heroku) and justify the choice.
+
+2. **System & Interaction Topology**:
    - Describe the data flows and system component relationships (Frontend client, Backend API, Database tables, cache, task queues).
    - Detail how communication is managed (REST APIs, WebSockets, Pub/Sub channels).
 
@@ -19,7 +23,7 @@ Your System Design Document must be highly detailed and address the following to
 3. **API Contracts & Endpoints**:
    - List every required REST endpoint showing:
      * HTTP Method (GET, POST, PUT, DELETE, PATCH).
-     * Endpoint path (e.g., `/api/v1/projects/{id}/runs`).
+     * Endpoint path (e.g., `/api/v1/projects/{{id}}/runs`).
      * Query / Path parameters with types.
      * Request payload schema (detailed Pydantic-like JSON attributes).
      * Response payload schema (including HTTP status codes for success, validation error, and server error).

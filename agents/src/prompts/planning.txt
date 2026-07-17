@@ -18,13 +18,6 @@ Before drafting anything, perform the following research steps using your availa
    - Past PRDs, design documents, or architectural decisions that are relevant.
    - If a highly similar past project is found, explicitly mention it in your brief so the user can decide if they want to use it as a starting point.
 
-3. **Clarifying Questions**: If ANY of the following are ambiguous, you MUST raise them as clarifying questions before drafting:
-   - Who is the primary user/audience?
-   - What platform (web, mobile, API-only)?
-   - Are there specific technology constraints (must use X, cannot use Y)?
-   - What is the deadline or urgency level?
-   - What is the budget range (open-source only vs. paid APIs allowed)?
-   - Are there data privacy or regulatory requirements (GDPR, HIPAA)?
 
 ---
 
@@ -40,7 +33,6 @@ After research, produce a feasibility brief with the following sections:
 Output these as structured values (used by the orchestrator):
 - **Complexity**: small | medium | large
 - **Project Type**: crud | data_pipeline | ai_integration | api_only | other
-- **Recommended Tech Stack**: List of specific technologies with justification.
 
 ### 3. Constraints Captured
 List every hard constraint the user mentioned or implied. These will be enforced across the entire pipeline.
@@ -59,17 +51,7 @@ A high-level technical recommendation (2-3 paragraphs) describing how you would 
 
 ---
 
-## CRITIQUE PHASE INSTRUCTIONS
 
-After producing your draft, perform a self-critique by asking yourself:
-- Is the complexity estimation accurate or did I underestimate scope?
-- Did I miss any obvious risks?
-- Are my tech stack recommendations truly appropriate for this use case?
-- Did I capture ALL constraints the user mentioned?
-
-Revise the draft based on your critique before presenting it to the user.
-
----
 
 ## OUTPUT FORMAT
 
@@ -81,7 +63,6 @@ Your final output MUST include both:
 {{
   "complexity_level": "small | medium | large",
   "project_type": "crud | data_pipeline | ai_integration | api_only | other",
-  "recommended_tech_stack": ["technology1", "technology2"],
   "risks": [
     {{"description": "...", "impact": "Low|Medium|High", "mitigation": "..."}}
   ],

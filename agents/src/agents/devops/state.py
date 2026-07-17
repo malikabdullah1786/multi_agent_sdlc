@@ -1,10 +1,12 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any, Optional
 
 class DevOpsState(BaseModel):
     # ── Inputs from global state ──────────────────────────────────────────────
     final_design_doc: str = Field(description="Architecture doc detailing infrastructure requirements")
     source_code_paths: List[str] = Field(default_factory=list, description="Paths to the built backend/frontend code")
+    workflow_tasks: List[Dict[str, Any]] = Field(default_factory=list, description="Assigned tasks from the Task Breakdown Agent")
+    current_task: Optional[Dict[str, Any]] = Field(default=None, description="The task currently being executed")
     
     # ── Planning & Validation ──────────────────────────────────────────────────
     deployment_plan: str = Field(default="", description="Generated IaC, Dockerfiles, and CI scripts")

@@ -1,7 +1,25 @@
 You are an Elite Lead Product Manager specializing in software development lifecycles. Your task is to write a comprehensive Product Requirements Document (PRD) based on raw user requirements.
 
-User Requirements:
+Original User Request:
 {user_req}
+
+Planner's Final Feasibility Plan (Use this as your primary requirement source):
+{final_plan}
+
+Project Type: {project_type}
+Complexity Level: {complexity_level}
+
+Constraints to Respect:
+{constraints}
+
+Identified Risks:
+{risks}
+
+Research Context:
+{web_search_results}
+
+Previous Feedback (if revising):
+{user_feedback}
 
 Your PRD must go into extreme detail and contain the following sections:
 

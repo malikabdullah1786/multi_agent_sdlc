@@ -46,108 +46,106 @@ def pm_phase_b_stage(state: WorkflowSate) -> dict:
     pm_phase_b_subgraph.invoke({"workflow_tasks": state.workflow_tasks}, config={"configurable": {"thread_id": state.workflowId}})
     return {}
 
-def database_engineer_stage(state: WorkflowSate) -> dict:
-    # Creates DB based on Architect's design
-    database_engineer_subgraph.invoke({
+# ===========================================================================
+# DISPATCHER LOOP & WRAPPERS
+# ===========================================================================
+
+def dispatcher_stage(state: WorkflowSate) -> dict:
+    """
+    Evaluates dependencies and priority, picks the next agent role to execute,
+    and queues up their ready tasks.
+    """
+    all_tasks = state.workflow_tasks
+    completed = set(state.completed_task_titles)
+    
+    # 1. Find all pending tasks whose dependencies are fully met
+    ready_tasks = []
+    for t in all_tasks:
+        title = t.get("title", "")
+        if title in completed:
+            continue
+            
+        deps = t.get("dependencies", [])
+        if all(dep in completed for dep in deps):
+            ready_tasks.append(t)
+            
+    if not ready_tasks:
+        # Either all tasks are done, or there's an unresolvable dependency cycle
+        return {"active_role": "", "active_tasks": []}
+        
+    # 2. Tie-breaker precedence
+    precedence = ["database_engineer", "devops", "backend", "frontend", "qa", "reviewer", "security"]
+    def get_precedence(role: str) -> int:
+        return precedence.index(role) if role in precedence else 99
+        
+    # 3. Sort by priority (1 is highest), then by precedence
+    ready_tasks.sort(key=lambda x: (x.get("priority", 5), get_precedence(x.get("assignee_role", ""))))
+    
+    # 4. Pick the role of the most important ready task
+    chosen_role = ready_tasks[0].get("assignee_role", "")
+    
+    # 5. Gather ALL ready tasks for that chosen role
+    tasks_for_role = [t for t in ready_tasks if t.get("assignee_role", "") == chosen_role]
+    
+    return {"active_role": chosen_role, "active_tasks": tasks_for_role}
+
+def _dispatcher_router(state: WorkflowSate) -> str:
+    """Routes execution to the active agent."""
+    role = state.active_role
+    if not role:
+        return END
+        
+    if role == "backend":
+        return "backend_dev_stage"
+    if role == "frontend":
+        return "frontend_dev_stage"
+        
+    return f"{role}_stage"
+
+# ---------------------------------------------------------------------------
+# AGENT WRAPPER STAGES
+# ---------------------------------------------------------------------------
+def _execute_agent_subgraph(state: WorkflowSate, subgraph) -> dict:
+    # Send only active_tasks to the sub-agent
+    subgraph.invoke({
         "project_name": state.projectId,
-        "final_design_doc": state.final_design_doc
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    return {}
-
-# ---------------------------------------------------------------------------
-# FAN-OUT / FAN-IN / TARGETED
-# ---------------------------------------------------------------------------
-def fan_out_node(state: WorkflowSate) -> dict:
-    """Dummy node representing the start of parallel dev execution or targeted fix."""
-    return {}
-
-def backend_dev_stage(state: WorkflowSate) -> dict:
-    out = backend_dev_subgraph.invoke({
+        "prd": state.prd,
         "final_design_doc": state.final_design_doc,
-        "workflow_tasks": state.workflow_tasks
+        "source_code_paths": ["/backend", "/frontend"],
+        "workflow_tasks": state.active_tasks
     }, config={"configurable": {"thread_id": state.workflowId}})
-    # Append backend changes to final code array
-    return {"final_file_changes": state.final_file_changes + out.get("backend_file_changes", [])}
+    
+    # Mark tasks as completed
+    new_completed = state.completed_task_titles.copy()
+    for t in state.active_tasks:
+        new_completed.append(t.get("title", ""))
+        
+    return {
+        "completed_task_titles": new_completed,
+        "active_role": "",
+        "active_tasks": []
+    }
 
-def frontend_dev_stage(state: WorkflowSate) -> dict:
-    out = frontend_dev_subgraph.invoke({
-        "final_design_doc": state.final_design_doc,
-        "workflow_tasks": state.workflow_tasks
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    # Append frontend changes to final code array
-    return {"final_file_changes": state.final_file_changes + out.get("frontend_file_changes", [])}
-
-def fan_in_node(state: WorkflowSate) -> dict:
-    """Dummy node where parallel execution converges before QA."""
-    return {}
-
-# ---------------------------------------------------------------------------
-# GATES
-# ---------------------------------------------------------------------------
-def qa_stage(state: WorkflowSate) -> dict:
-    out = qa_subgraph.invoke({
-        "prd": state.prd, 
-        "final_design_doc": state.final_design_doc
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    return {"qa_passed": out.get("all_tests_passed", False)}
-
-def reviewer_stage(state: WorkflowSate) -> dict:
-    out = reviewer_subgraph.invoke({
-        "backend_file_changes": state.final_file_changes,
-        "frontend_file_changes": state.final_file_changes
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    return {"reviewer_approved": out.get("code_review_approved", False)}
-
-def security_stage(state: WorkflowSate) -> dict:
-    out = security_subgraph.invoke({
-        "backend_file_changes": state.final_file_changes,
-        "frontend_file_changes": state.final_file_changes
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    return {"security_approved": out.get("security_approved", False)}
+def database_engineer_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, database_engineer_subgraph)
 
 def devops_stage(state: WorkflowSate) -> dict:
-    devops_subgraph.invoke({
-        "final_design_doc": state.final_design_doc,
-        "source_code_paths": ["/backend", "/frontend"]
-    }, config={"configurable": {"thread_id": state.workflowId}})
-    return {}
+    return _execute_agent_subgraph(state, devops_subgraph)
 
+def backend_dev_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, backend_dev_subgraph)
 
-# ===========================================================================
-# ROUTERS
-# ===========================================================================
+def frontend_dev_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, frontend_dev_subgraph)
 
-def _fan_out_router(state: WorkflowSate) -> list:
-    """Routes to parallel agents if initial build, otherwise to target agent."""
-    if state.is_initial_build:
-        return ["backend_dev_stage", "frontend_dev_stage"]
-    
-    if state.target_agent == "backend":
-        return ["backend_dev_stage"]
-    elif state.target_agent == "frontend":
-        return ["frontend_dev_stage"]
-    else:
-        # Fallback to backend
-        return ["backend_dev_stage"]
+def qa_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, qa_subgraph)
 
-def _qa_router(state: WorkflowSate) -> str:
-    """If QA fails, bounce back to fan-out to fix bugs."""
-    if state.qa_passed:
-        return "reviewer_stage"
-    return "fan_out_node"
+def reviewer_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, reviewer_subgraph)
 
-def _reviewer_router(state: WorkflowSate) -> str:
-    """If Reviewer rejects, bounce back to fan-out to fix code smells."""
-    if state.reviewer_approved:
-        return "security_stage"
-    return "fan_out_node"
-
-def _security_router(state: WorkflowSate) -> str:
-    """If Security rejects, bounce back to fan-out to fix vulnerabilities."""
-    if state.security_approved:
-        return "devops_stage"
-    return "fan_out_node"
-
+def security_stage(state: WorkflowSate) -> dict:
+    return _execute_agent_subgraph(state, security_subgraph)
 
 # ===========================================================================
 # PARENT GRAPH ASSEMBLY
@@ -155,23 +153,22 @@ def _security_router(state: WorkflowSate) -> str:
 
 parent_workflow = StateGraph(WorkflowSate)
 
-# Add nodes
+# Setup Phase Nodes
 parent_workflow.add_node("planning_stage", planning_stage)
 parent_workflow.add_node("pm_phase_a_stage", pm_phase_a_stage)
 parent_workflow.add_node("architect_stage", architect_stage)
 parent_workflow.add_node("task_breakdown_stage", task_breakdown_stage)
 parent_workflow.add_node("pm_phase_b_stage", pm_phase_b_stage)
-parent_workflow.add_node("database_engineer_stage", database_engineer_stage)
 
-parent_workflow.add_node("fan_out_node", fan_out_node)
+# Dispatcher Loop Nodes
+parent_workflow.add_node("dispatcher_stage", dispatcher_stage)
+parent_workflow.add_node("database_engineer_stage", database_engineer_stage)
+parent_workflow.add_node("devops_stage", devops_stage)
 parent_workflow.add_node("backend_dev_stage", backend_dev_stage)
 parent_workflow.add_node("frontend_dev_stage", frontend_dev_stage)
-parent_workflow.add_node("fan_in_node", fan_in_node)
-
 parent_workflow.add_node("qa_stage", qa_stage)
 parent_workflow.add_node("reviewer_stage", reviewer_stage)
 parent_workflow.add_node("security_stage", security_stage)
-parent_workflow.add_node("devops_stage", devops_stage)
 
 # ── Linear Setup Phase ──────────────────────────────────────────────────
 parent_workflow.add_edge(START, "planning_stage")
@@ -179,40 +176,31 @@ parent_workflow.add_edge("planning_stage", "pm_phase_a_stage")
 parent_workflow.add_edge("pm_phase_a_stage", "architect_stage")
 parent_workflow.add_edge("architect_stage", "task_breakdown_stage")
 parent_workflow.add_edge("task_breakdown_stage", "pm_phase_b_stage")
-parent_workflow.add_edge("pm_phase_b_stage", "database_engineer_stage")
-parent_workflow.add_edge("database_engineer_stage", "fan_out_node")
+parent_workflow.add_edge("pm_phase_b_stage", "dispatcher_stage")
 
-# ── Parallel Fan-Out Execution ──────────────────────────────────────────
+# ── Dispatcher Routing ──────────────────────────────────────────────────
 parent_workflow.add_conditional_edges(
-    "fan_out_node",
-    _fan_out_router,
-    ["backend_dev_stage", "frontend_dev_stage"]
+    "dispatcher_stage",
+    _dispatcher_router,
+    {
+        "database_engineer_stage": "database_engineer_stage",
+        "devops_stage": "devops_stage",
+        "backend_dev_stage": "backend_dev_stage",
+        "frontend_dev_stage": "frontend_dev_stage",
+        "qa_stage": "qa_stage",
+        "reviewer_stage": "reviewer_stage",
+        "security_stage": "security_stage",
+        END: END
+    }
 )
 
-# ── Fan-In Convergence ──────────────────────────────────────────────────
-parent_workflow.add_edge("backend_dev_stage", "fan_in_node")
-parent_workflow.add_edge("frontend_dev_stage", "fan_in_node")
-parent_workflow.add_edge("fan_in_node", "qa_stage")
-
-# ── Quality Gates with Self-Healing Feedback Loops ──────────────────────
-parent_workflow.add_conditional_edges(
-    "qa_stage",
-    _qa_router,
-    {"reviewer_stage": "reviewer_stage", "fan_out_node": "fan_out_node"}
-)
-
-parent_workflow.add_conditional_edges(
-    "reviewer_stage",
-    _reviewer_router,
-    {"security_stage": "security_stage", "fan_out_node": "fan_out_node"}
-)
-
-parent_workflow.add_conditional_edges(
-    "security_stage",
-    _security_router,
-    {"devops_stage": "devops_stage", "fan_out_node": "fan_out_node"}
-)
-
-parent_workflow.add_edge("devops_stage", END)
+# ── Loop Back to Dispatcher ─────────────────────────────────────────────
+parent_workflow.add_edge("database_engineer_stage", "dispatcher_stage")
+parent_workflow.add_edge("devops_stage", "dispatcher_stage")
+parent_workflow.add_edge("backend_dev_stage", "dispatcher_stage")
+parent_workflow.add_edge("frontend_dev_stage", "dispatcher_stage")
+parent_workflow.add_edge("qa_stage", "dispatcher_stage")
+parent_workflow.add_edge("reviewer_stage", "dispatcher_stage")
+parent_workflow.add_edge("security_stage", "dispatcher_stage")
 
 orchestration_graph = parent_workflow.compile()

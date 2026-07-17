@@ -7,10 +7,7 @@ class ArchitectState(BaseModel):
     complexity_level: str = Field(default="medium", description="Project complexity from Planner")
     project_type: str = Field(default="other", description="Project type from Planner")
     constraints: List[str] = Field(default_factory=list, description="Hard constraints from Planner")
-    recommended_tech_stack: List[str] = Field(
-        default_factory=list,
-        description="Recommended technologies from Planner"
-    )
+
     # ── Research internals ────────────────────────────────────────────────────
     web_search_results: List[str] = Field(
         default_factory=list,

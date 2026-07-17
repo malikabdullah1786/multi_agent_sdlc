@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class DatabaseEngineerState(BaseModel):
@@ -9,6 +9,10 @@ class DatabaseEngineerState(BaseModel):
     workflow_tasks: List[Dict[str, Any]] = Field(
         default_factory=list, 
         description="Assigned tasks from the Task Breakdown Agent"
+    )
+    current_task: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The task currently being executed"
     )
 
     # ── Execution internals ────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
 from agents.src.agents.qa.state import QAState
+from typing import Dict, Any
 from agents.src.agents.qa.tools import (
     api_integration_tester,
     run_test_suite,
@@ -23,7 +24,7 @@ _llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
 # ---------------------------------------------------------------------------
 # 1. Generate Test Scripts Node
 # ---------------------------------------------------------------------------
-def generate_test_scripts_node(state: QAState) -> dict:
+def generate_tests_node(state: QAState) -> dict:
     """
     Reads the PRD and generates comprehensive E2E test scripts
     (e.g., Cypress/Playwright) to verify user stories.
@@ -59,21 +60,21 @@ def execute_tests_node(state: QAState) -> dict:
     Runs the generated test suite.
     """
     # Simulate writing test script to disk and running it
-    output = run_test_suite.invoke({"test_file_path": "tests/e2e/temp_test.spec.ts"})
+    output = "E2E tests failed" # run_test_suite.invoke({"test_file_path": "tests/e2e/temp_test.spec.ts"})
     
     return {"test_run_output": output}
 
 # ---------------------------------------------------------------------------
-# 3. Analyze Results Node
+# 3. Analyze Failures Node
 # ---------------------------------------------------------------------------
-def analyze_results_node(state: QAState) -> dict:
+def analyze_failures_node(state: QAState) -> dict:
     """
     Parses the output of the test runner. 
     If failures exist, extracts them into structured bug descriptions.
     """
-    # Simple logic for now: if "failed" is in the output, extract a dummy bug
     logs = state.test_run_output.lower()
     discovered_bugs = []
+    jira_urls = []
     
     if "fail" in logs:
         discovered_bugs.append({
@@ -82,35 +83,23 @@ def analyze_results_node(state: QAState) -> dict:
             "expected": "Redirect to dashboard",
             "actual": "Button does nothing, 400 Error in console"
         })
+        jira_urls.append("https://jira.company.com/browse/BUG-101")
         
-    return {"discovered_bugs": discovered_bugs}
+    return {
+        "discovered_bugs": discovered_bugs,
+        "jira_ticket_urls": jira_urls,
+        "all_tests_passed": len(discovered_bugs) == 0
+    }
 
 # ---------------------------------------------------------------------------
-# 4. File Bug Reports Node
+# Task Queue Management
 # ---------------------------------------------------------------------------
-def file_bug_reports_node(state: QAState) -> dict:
-    """
-    Files a Jira ticket for every bug found during analysis.
-    """
-    jira_urls = []
-    for bug in state.discovered_bugs:
-        try:
-            # generate_bug_report.invoke(bug)
-            pass
-        except NotImplementedError as e:
-            jira_urls.append(str(e))
-            
-    # Simulate generated Jira URLs
-    if not jira_urls and state.discovered_bugs:
-        jira_urls = ["https://jira.company.com/browse/BUG-101"]
-        
-    return {"jira_ticket_urls": jira_urls, "all_tests_passed": False}
+def pop_task_node(state: QAState) -> dict:
+    tasks = list(state.workflow_tasks)
+    if not tasks:
+        return {"current_task": None}
+    next_task = tasks.pop(0)
+    return {"workflow_tasks": tasks, "current_task": next_task}
 
-# ---------------------------------------------------------------------------
-# 5. Mark QA Complete Node
-# ---------------------------------------------------------------------------
-def mark_qa_complete_node(state: QAState) -> dict:
-    """
-    Called when analysis reveals zero bugs. Marks the build as ready for DevOps.
-    """
-    return {"all_tests_passed": True}
+def mark_task_complete_node(state: QAState) -> dict:
+    return {"current_task": None}

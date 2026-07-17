@@ -107,12 +107,21 @@ def run_tests_node(state: BackendDevState) -> dict:
 def mark_task_complete_node(state: BackendDevState) -> dict:
     """
     If tests pass, the task is marked as completed and added to the done pile.
+    Extracts the generated code into backend_file_changes.
     """
     completed = list(state.completed_tasks)
+    changes = list(state.backend_file_changes)
+    
     if state.current_task:
         completed.append(state.current_task)
+        if state.current_code_draft:
+            changes.append({
+                "task_title": state.current_task.get("title", "Unknown"),
+                "content": state.current_code_draft
+            })
         
     return {
         "completed_tasks": completed,
-        "current_task": None
+        "current_task": None,
+        "backend_file_changes": changes
     }

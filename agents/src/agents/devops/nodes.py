@@ -12,6 +12,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.types import interrupt
 
 from agents.src.agents.devops.state import DevOpsState
+from typing import Dict, Any
 from agents.src.agents.devops.tools import (
     validate_iac_config,
     run_deployment,
@@ -128,3 +129,16 @@ def verify_health_node(state: DevOpsState) -> dict:
         status = str(e)
         
     return {"health_check_status": status}
+
+# ---------------------------------------------------------------------------
+# Task Queue Management
+# ---------------------------------------------------------------------------
+def pop_task_node(state: DevOpsState) -> dict:
+    tasks = list(state.workflow_tasks)
+    if not tasks:
+        return {"current_task": None}
+    next_task = tasks.pop(0)
+    return {"workflow_tasks": tasks, "current_task": next_task}
+
+def mark_task_complete_node(state: DevOpsState) -> dict:
+    return {"current_task": None}

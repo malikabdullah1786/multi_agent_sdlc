@@ -13,8 +13,12 @@ Flow:
     → finalize          (parse structured JSON, write final outputs)
   END
 """
+from dotenv import load_dotenv
+load_dotenv()  # Ensure .env is loaded before importing nodes which instantiate LLMs
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from agents.src.agents.planning.state import PlanningState
 from agents.src.agents.planning.nodes import (
@@ -25,6 +29,18 @@ from agents.src.agents.planning.nodes import (
     user_approval_node,
     finalize_node,
 )
+
+# ---------------------------------------------------------------------------
+# Router: Should we generate the draft based on user clarification?
+# ---------------------------------------------------------------------------
+
+
+def _should_loop_clarification(state: PlanningState) -> str:
+    """
+    If the agent generated clarifying questions during this run, loop back to the node 
+    to evaluate the new answers. If the agent said CLEAR (empty questions list), proceed to draft.
+    """
+    return "clarification" if state.clarifying_questions else "generate_draft"
 
 # ---------------------------------------------------------------------------
 # Router: Should we revise the draft based on critique?
@@ -73,7 +89,6 @@ workflow.add_node("finalize", finalize_node)
 # Edges: Linear flow up to the branching points
 workflow.add_edge(START, "research")
 workflow.add_edge("research", "clarification")
-workflow.add_edge("clarification", "generate_draft")
 workflow.add_edge("generate_draft", "critique")
 
 # Branch: Revision loop after critique
@@ -96,7 +111,67 @@ workflow.add_conditional_edges(
     },
 )
 
+workflow.add_conditional_edges(
+    "clarification",
+    _should_loop_clarification,
+    {
+        "generate_draft": "generate_draft",
+        "clarification": "clarification",
+    },
+)
+
 workflow.add_edge("finalize", END)
 
 # Compile with in-memory checkpointer (parent graph will inject Postgres checkpointer)
 planning_subgraph = workflow.compile(checkpointer=MemorySaver())
+
+
+if __name__ == "__main__":
+    config = {"configurable": {"thread_id": "test-planning-001"}}
+
+    print("Starting Planning Agent...")
+    print("Hi there!")
+    user_input=input()
+    res = planning_subgraph.invoke(
+        {"user_req": user_input},
+        config=config,
+    )
+
+    while True:
+        state = planning_subgraph.get_state(config)
+        if not state.next:
+            print("\nWorkflow Finished!")
+            print(res)
+            break
+
+        task = state.tasks[0]
+        interrupt_val = task.interrupts[0]
+
+        print(f"\n--- Paused at node: {state.next[0]} ---")
+        
+        payload = interrupt_val.value if hasattr(interrupt_val, "value") else interrupt_val
+        
+        if isinstance(payload, dict) and payload.get("type") == "clarifying_questions":
+            print("The Planning Agent says:")
+            for q in payload.get("questions", []):
+                print(f"{q}")
+        elif isinstance(payload, dict) and payload.get("type") == "plan_approval":
+            print("\nDraft feasibility brief created:")
+            print("-" * 50)
+            print(payload.get("draft"))
+            print("-" * 50)
+            print("Review the draft plan. Type 'approve' or 'ok' to proceed, or write your feedback:")
+        else:
+            print(f"Interrupt payload: {interrupt_val}")
+
+        print("\nEnter your response (or type 'exit' to quit):")
+        user_input = input("> ").strip()
+        if user_input.lower() == "exit":
+            print("Exited.")
+            break
+
+        print("\nResuming agent execution...")
+        res = planning_subgraph.invoke(
+            Command(resume=user_input),
+            config=config
+        )

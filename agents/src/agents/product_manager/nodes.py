@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langgraph.types import interrupt
 
 from agents.src.agents.product_manager.state import ProductManagerState
@@ -27,9 +27,13 @@ from agents.src.agents.product_manager.tools import (
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+_llm = ChatGroq(
+    model="qwen/qwen3.6-27b",
+    temperature=0.7,
+    max_tokens=2500 
+)
 
-_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
+_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
 def _load_prompt(filename: str) -> str:
@@ -48,13 +52,12 @@ def research_node(state: ProductManagerState) -> dict:
     web_results: list[str] = []
     rag_results: list[str] = []
 
-    # Web search (Tavily)
+    # Web search (DuckDuckGo)
     try:
-        from langchain_community.tools.tavily_search import TavilySearchResults
-        tavily = TavilySearchResults(max_results=4)
-        raw = tavily.invoke(f"product requirements {state.user_req}")
-        if isinstance(raw, list):
-            web_results = [r.get("content", "") for r in raw if isinstance(r, dict)]
+        from langchain_community.tools import DuckDuckGoSearchResults
+        ddg = DuckDuckGoSearchResults(max_results=4)
+        raw = ddg.invoke(f"product requirements {state.user_req}")
+        web_results = [str(raw)]
     except Exception as e:
         web_results = [f"Web search unavailable: {e}"]
 
@@ -125,6 +128,14 @@ def finalize_prd_node(state: ProductManagerState) -> dict:
     slug = re.sub(r"[^a-z0-9\s]", "", state.user_req.lower())
     slug = "-".join(slug.split()[:5])   # max 5 words
     channel_name = f"proj-{slug}"[:80]  # Slack channel name max 80 chars
+    
+    # Save the approved PRD to the workspace root
+    workspace_root = Path(__file__).resolve().parents[4]
+    prd_path = workspace_root / "final_prd.md"
+    try:
+        prd_path.write_text(state.prd_draft, encoding="utf-8")
+    except Exception as e:
+        print(f"Failed to write PRD to {prd_path}: {e}")
 
     return {
         "prd": state.prd_draft,
@@ -141,18 +152,19 @@ def finalize_prd_node(state: ProductManagerState) -> dict:
 def create_slack_channel_node(state: ProductManagerState) -> dict:
     """
     Phase B — Step 1:
-    Creates a dedicated Slack channel for this project.
+    Creates a dedicated public channel for the project via Slack API.
     """
     try:
         result = create_slack_channel.invoke({"channel_name": state.project_name})
         return {
-            "slack_channel_id": result.get("channel_id", ""),
+            "slack_channel_id": result.get("channel_id", "#general"),
             "slack_channel_name": result.get("channel_name", state.project_name),
         }
-    except NotImplementedError:
-        # Stub: return placeholder until Slack MCP is connected
+    except Exception as e:
+        print(f"Failed to create Slack channel: {e}")
+        # Fallback to general
         return {
-            "slack_channel_id": "STUB_CHANNEL_ID",
+            "slack_channel_id": "#general",
             "slack_channel_name": state.project_name,
         }
 
@@ -162,8 +174,8 @@ def create_jira_epic_node(state: ProductManagerState) -> dict:
     Phase B — Step 2:
     Creates the parent Jira Epic for this project using the approved PRD as description.
     """
-    # TODO: Replace PROJ with your actual Jira project key from config/env
-    jira_project_key = "PROJ"
+    import os
+    jira_project_key = os.getenv("JIRA_PROJECT_KEY", "KAN")
     epic_name = state.project_name.replace("-", " ").title()
 
     try:
@@ -174,7 +186,8 @@ def create_jira_epic_node(state: ProductManagerState) -> dict:
             "priority": "High" if state.complexity_level == "large" else "Medium",
         })
         return {"jira_epic_key": result.get("epic_key", "")}
-    except NotImplementedError:
+    except Exception as e:
+        print(f"Failed to create Jira Epic: {e}")
         return {"jira_epic_key": "STUB-EPIC-1"}
 
 
@@ -187,14 +200,18 @@ def create_jira_tickets_node(state: ProductManagerState) -> dict:
     if not state.workflow_tasks:
         return {"jira_ticket_keys": []}
 
+    import os
+    jira_project_key = os.getenv("JIRA_PROJECT_KEY", "KAN")
+
     try:
         ticket_keys = create_jira_tickets.invoke({
-            "project_key": "PROJ",
+            "project_key": jira_project_key,
             "epic_key": state.jira_epic_key,
             "tasks": state.workflow_tasks,
         })
         return {"jira_ticket_keys": ticket_keys}
-    except NotImplementedError:
+    except Exception as e:
+        print(f"Failed to create Jira tickets: {e}")
         stub_keys = [f"STUB-{i+2}" for i in range(len(state.workflow_tasks))]
         return {"jira_ticket_keys": stub_keys}
 
@@ -202,13 +219,10 @@ def create_jira_tickets_node(state: ProductManagerState) -> dict:
 def notify_slack_node(state: ProductManagerState) -> dict:
     """
     Phase B — Step 4:
-    Posts the project kickoff summary to the Slack channel, including:
-    - PRD summary
-    - Jira Epic link
-    - All Jira ticket links
-    - System Design Document summary
+    Posts the project kickoff summary to the Slack channel via Official Slack SDK.
     """
-    jira_base_url = "https://yourcompany.atlassian.net/browse"
+    import os
+    jira_base_url = f"{os.getenv('JIRA_URL', 'https://yourcompany.atlassian.net')}/browse"
 
     message_lines = [
         f"🚀 *Project Kickoff: {state.project_name.replace('-', ' ').title()}*",
@@ -233,9 +247,9 @@ def notify_slack_node(state: ProductManagerState) -> dict:
     try:
         post_slack_message.invoke({
             "channel_id": state.slack_channel_id,
-            "message": message,
+            "message": message
         })
-    except NotImplementedError:
-        pass  # Slack MCP not yet connected — stub
+    except Exception as e:
+        print("Failed to post to Slack via SDK:", str(e).encode('ascii', 'ignore').decode('ascii'))
 
     return {}

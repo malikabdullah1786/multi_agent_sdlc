@@ -10,11 +10,12 @@ Each node returns a partial dict to update PlanningState.
 """
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langgraph.types import interrupt
 
 from agents.src.agents.planning.state import PlanningState
@@ -23,12 +24,22 @@ from agents.src.agents.planning.tools import rag_search, parse_structured_output
 # ---------------------------------------------------------------------------
 # LLM setup  (swap model / provider to your preference)
 # ---------------------------------------------------------------------------
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+_llm_draft = ChatGroq(
+    model="qwen/qwen3.6-27b",
+    temperature=0.7,
+    max_tokens=4000  # Give as much as possible to the draft
+)
+
+_llm_critique = ChatGroq(
+    model="qwen/qwen3.6-27b",
+    temperature=0.7,
+    max_tokens=2000  # Restrict critique to avoid blowing out 8000 TPM limit
+)
 
 # ---------------------------------------------------------------------------
 # Prompt loader helper
 # ---------------------------------------------------------------------------
-_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
+_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 
 
 def _load_prompt(filename: str) -> str:
@@ -49,16 +60,13 @@ def research_node(state: PlanningState) -> dict:
     rag_result = rag_search.invoke({"query": state.user_req, "k": 5})
     rag_results = [rag_result] if rag_result else []
 
-    # --- Tavily web search (lazy import so missing key doesn't break other agents) ---
+    # --- DuckDuckGo web search (lazy import so missing package doesn't break other agents) ---
     web_results = []
     try:
-        from langchain_community.tools.tavily_search import TavilySearchResults
-        tavily = TavilySearchResults(max_results=5)
-        raw = tavily.invoke(state.user_req)
-        if isinstance(raw, list):
-            web_results = [r.get("content", "") for r in raw if isinstance(r, dict)]
-        else:
-            web_results = [str(raw)]
+        from langchain_community.tools import DuckDuckGoSearchResults
+        ddg = DuckDuckGoSearchResults(max_results=5)
+        raw = ddg.invoke(state.user_req)
+        web_results = [str(raw)]
     except Exception as e:
         web_results = [f"Web search unavailable: {e}"]
 
@@ -79,34 +87,23 @@ def clarification_node(state: PlanningState) -> dict:
     Uses the LLM to decide if the requirement is ambiguous. If yes, raises
     an interrupt so the UI can present questions to the user.
     """
-    # Skip if we already have answers
-    if state.user_clarification_answers:
-        return {}
-
-    clarify_prompt = PromptTemplate.from_template(
-        """You are a requirements analyst. Given the raw user requirement below, 
-        list any clarifying questions that MUST be answered before writing a feasibility brief.
-        Focus on: platform, users, constraints, deadline, budget, privacy/regulatory needs.
-        
-        If the requirement is already sufficiently clear, respond with: CLEAR
-        
-        User Requirement: {user_req}
-        
-        Respond with either "CLEAR" or a numbered list of questions."""
-    )
-    response = _llm.invoke(clarify_prompt.format(user_req=state.user_req))
+    prompt_path = _PROMPTS_DIR / "planning_qa.txt"
+    clarify_prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
+    response = _llm_critique.invoke(clarify_prompt.format(
+        user_req=state.user_req,
+        qa_history=state.user_clarification_answers or "None"
+    ))
     content = response.content.strip()
 
-    if content.upper() == "CLEAR":
+    # Strip out any <think>...</think> blocks from Qwen before checking for CLEAR
+    clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+    if clean_content.upper() == "CLEAR":
         return {"clarifying_questions": []}
 
-    # Parse questions from numbered list
-    questions = [
-        line.strip().lstrip("0123456789. ")
-        for line in content.split("\n")
-        if line.strip() and line.strip()[0].isdigit()
-    ]
-
+    # Pass the entire conversational response back to the user
+    questions = [clean_content]
+    
     if questions:
         # Interrupt and wait for user input via the UI
         answers = interrupt({
@@ -114,9 +111,13 @@ def clarification_node(state: PlanningState) -> dict:
             "questions": questions,
             "message": "The Planning Agent needs answers to these questions before proceeding.",
         })
+        answers_str = answers if isinstance(answers, str) else str(answers)
+        new_history = f"Questions asked:\n" + "\n".join(f"- {q}" for q in questions) + f"\nUser answered:\n{answers_str}\n\n"
+        accumulated_history = (state.user_clarification_answers + "\n" + new_history).strip()
+        
         return {
             "clarifying_questions": questions,
-            "user_clarification_answers": answers if isinstance(answers, str) else str(answers),
+            "user_clarification_answers": accumulated_history,
         }
 
     return {"clarifying_questions": []}
@@ -144,7 +145,7 @@ def generate_draft_node(state: PlanningState) -> dict:
         user_feedback=state.user_feedback or "No previous feedback.",
     )
 
-    response = _llm.invoke(formatted)
+    response = _llm_draft.invoke(formatted)
     return {
         "plan_draft": response.content,
         "iteration_count": state.iteration_count + 1,
@@ -163,7 +164,7 @@ def critique_node(state: PlanningState) -> dict:
     template_str = _load_prompt("planning_critique.txt")
     prompt = PromptTemplate.from_template(template_str)
 
-    response = _llm.invoke(
+    response = _llm_critique.invoke(
         prompt.format(user_req=state.user_req, plan_draft=state.plan_draft)
     )
     critique = response.content.strip()
@@ -210,11 +211,15 @@ def finalize_node(state: PlanningState) -> dict:
     """
     structured = parse_structured_output.invoke({"raw_output": state.plan_draft})
 
+    # Write the human-readable draft to a markdown file
+    output_file = Path(__file__).resolve().parents[4] / "final_plan.md"
+    output_file.write_text(state.plan_draft, encoding="utf-8")
+
     return {
         "final_plan": state.plan_draft,
         "complexity_level": structured.get("complexity_level", "medium"),
         "project_type": structured.get("project_type", "other"),
-        "recommended_tech_stack": structured.get("recommended_tech_stack", []),
+
         "risks": structured.get("risks", []),
         "constraints": structured.get("constraints", []),
         "is_approved": True,

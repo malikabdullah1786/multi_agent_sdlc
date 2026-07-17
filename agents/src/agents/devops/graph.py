@@ -21,8 +21,16 @@ from agents.src.agents.devops.nodes import (
     validate_plan_node,
     approve_deployment_node,
     execute_deployment_node,
-    verify_health_node
+    verify_health_node,
+    pop_task_node,
+    mark_task_complete_node
 )
+
+# ---------------------------------------------------------------------------
+# Router: Is Queue Empty?
+# ---------------------------------------------------------------------------
+def _is_queue_empty(state: DevOpsState) -> str:
+    return "END" if state.current_task is None else "generate_deployment_plan"
 
 # ---------------------------------------------------------------------------
 # Router: Validate IaC Configs
@@ -54,14 +62,17 @@ def _is_deployment_approved(state: DevOpsState) -> str:
 workflow = StateGraph(DevOpsState)
 
 # Register all nodes
+workflow.add_node("pop_task", pop_task_node)
 workflow.add_node("generate_deployment_plan", generate_deployment_plan_node)
 workflow.add_node("validate_plan", validate_plan_node)
 workflow.add_node("approve_deployment", approve_deployment_node)
 workflow.add_node("execute_deployment", execute_deployment_node)
 workflow.add_node("verify_health", verify_health_node)
+workflow.add_node("mark_task_complete", mark_task_complete_node)
 
-# Linear flow up to validation
-workflow.add_edge(START, "generate_deployment_plan")
+# Flow execution
+workflow.add_edge(START, "pop_task")
+workflow.add_conditional_edges("pop_task", _is_queue_empty, {"END": END, "generate_deployment_plan": "generate_deployment_plan"})
 workflow.add_edge("generate_deployment_plan", "validate_plan")
 
 # Autonomous IaC fixing loop
@@ -86,6 +97,7 @@ workflow.add_conditional_edges(
 
 # Execution phase
 workflow.add_edge("execute_deployment", "verify_health")
-workflow.add_edge("verify_health", END)
+workflow.add_edge("verify_health", "mark_task_complete")
+workflow.add_edge("mark_task_complete", "pop_task")
 
 devops_subgraph = workflow.compile(checkpointer=MemorySaver())

@@ -118,12 +118,23 @@ def browser_check_node(state: FrontendDevState) -> dict:
 # 7. Mark Task Complete Node
 # ---------------------------------------------------------------------------
 def mark_task_complete_node(state: FrontendDevState) -> dict:
-    """Task is completed and pushed to the done pile."""
+    """
+    Task is completed and pushed to the done pile.
+    Extracts the generated code into frontend_file_changes.
+    """
     completed = list(state.completed_tasks)
+    changes = list(state.frontend_file_changes)
+    
     if state.current_task:
         completed.append(state.current_task)
+        if state.current_code_draft:
+            changes.append({
+                "task_title": state.current_task.get("title", "Unknown"),
+                "content": state.current_code_draft
+            })
         
     return {
         "completed_tasks": completed,
-        "current_task": None
+        "current_task": None,
+        "frontend_file_changes": changes
     }

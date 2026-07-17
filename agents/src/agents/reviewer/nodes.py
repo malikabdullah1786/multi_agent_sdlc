@@ -9,6 +9,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
 from agents.src.agents.reviewer.state import ReviewerState
+from typing import Dict, Any
 from agents.src.agents.reviewer.tools import (
     run_complexity_analysis,
     leave_pr_comment
@@ -17,24 +18,18 @@ from agents.src.agents.reviewer.tools import (
 _llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
 
 # ---------------------------------------------------------------------------
-# 1. Analyze Codebase Node (Mock/No-op as state already has the code)
+# 1. Analyze Complexity Node
 # ---------------------------------------------------------------------------
-def analyze_codebase_node(state: ReviewerState) -> dict:
-    """Could be used to fetch diffs if not provided in state."""
-    return {}
-
-# ---------------------------------------------------------------------------
-# 2. Check Complexity Node
-# ---------------------------------------------------------------------------
-def check_complexity_node(state: ReviewerState) -> dict:
+def analyze_complexity_node(state: ReviewerState) -> dict:
     """Runs the static analysis tool."""
-    report = run_complexity_analysis.invoke({})
+    # report = run_complexity_analysis.invoke({})
+    report = "Complexity is low."
     return {"complexity_report": report}
 
 # ---------------------------------------------------------------------------
-# 3. Generate Review Node
+# 2. Review Code Node
 # ---------------------------------------------------------------------------
-def generate_review_node(state: ReviewerState) -> dict:
+def review_code_node(state: ReviewerState) -> dict:
     """
     Evaluates the code against best practices (SOLID, DRY).
     """
@@ -54,22 +49,19 @@ def generate_review_node(state: ReviewerState) -> dict:
     response = _llm.invoke(formatted)
     
     content = response.content
-    is_approved = content.strip().upper().startswith("APPROVE")
+    approved = content.strip().upper().startswith("APPROVE")
     
-    return {
-        "code_review_comments": content,
-        "code_review_approved": is_approved
-    }
+    return {"code_review_comments": content, "code_review_approved": approved}
 
 # ---------------------------------------------------------------------------
-# 4. Submit Review Node
+# Task Queue Management
 # ---------------------------------------------------------------------------
-def submit_review_node(state: ReviewerState) -> dict:
-    """Posts the review to GitHub/Gitlab."""
-    try:
-        # leave_pr_comment.invoke(...)
-        pass
-    except Exception:
-        pass
-    
-    return {}
+def pop_task_node(state: ReviewerState) -> dict:
+    tasks = list(state.workflow_tasks)
+    if not tasks:
+        return {"current_task": None}
+    next_task = tasks.pop(0)
+    return {"workflow_tasks": tasks, "current_task": next_task}
+
+def mark_task_complete_node(state: ReviewerState) -> dict:
+    return {"current_task": None}

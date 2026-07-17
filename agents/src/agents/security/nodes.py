@@ -9,6 +9,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
 from agents.src.agents.security.state import SecurityState
+from typing import Dict, Any
 from agents.src.agents.security.tools import (
     run_sast_scanner,
     check_dependencies,
@@ -67,6 +68,19 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
         "security_report": content,
         "security_approved": is_approved
     }
+
+# ---------------------------------------------------------------------------
+# Task Queue Management
+# ---------------------------------------------------------------------------
+def pop_task_node(state: SecurityState) -> dict:
+    tasks = list(state.workflow_tasks)
+    if not tasks:
+        return {"current_task": None}
+    next_task = tasks.pop(0)
+    return {"workflow_tasks": tasks, "current_task": next_task}
+
+def mark_task_complete_node(state: SecurityState) -> dict:
+    return {"current_task": None}
 
 # ---------------------------------------------------------------------------
 # 4. Enforce Security Gate Node

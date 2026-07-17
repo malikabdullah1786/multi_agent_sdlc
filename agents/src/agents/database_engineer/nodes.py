@@ -10,6 +10,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
 from agents.src.agents.database_engineer.state import DatabaseEngineerState
+from typing import Dict, Any
 from agents.src.agents.database_engineer.tools import (
     create_project_database,
     run_migrations,
@@ -110,7 +111,18 @@ def validate_schema_node(state: DatabaseEngineerState) -> dict:
     except NotImplementedError as e:
         diff_notes = "SCHEMA_MATCH"
         
-    return {
-        "schema_diff_notes": diff_notes,
-        "db_schema_ready": diff_notes == "SCHEMA_MATCH"
-    }
+    is_ready = diff_notes == "SCHEMA_MATCH"
+    return {"db_schema_ready": is_ready, "schema_diff_notes": diff_notes}
+
+# ---------------------------------------------------------------------------
+# Task Queue Management
+# ---------------------------------------------------------------------------
+def pop_task_node(state: DatabaseEngineerState) -> dict:
+    tasks = list(state.workflow_tasks)
+    if not tasks:
+        return {"current_task": None}
+    next_task = tasks.pop(0)
+    return {"workflow_tasks": tasks, "current_task": next_task}
+
+def mark_task_complete_node(state: DatabaseEngineerState) -> dict:
+    return {"current_task": None}

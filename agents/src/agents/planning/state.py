@@ -49,10 +49,7 @@ class PlanningState(BaseModel):
         default="",
         description="Project category: crud | data_pipeline | ai_integration | api_only | other"
     )
-    recommended_tech_stack: List[str] = Field(
-        default_factory=list,
-        description="Recommended technologies for this project"
-    )
+
     risks: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Identified risks: [{description, impact, mitigation}]"

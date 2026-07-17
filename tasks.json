@@ -1,0 +1,99 @@
+[
+  {
+    "title": "Design PostgreSQL schema for contact submissions",
+    "description": "Design the PostgreSQL schema for persisting contact form submissions, including tables, columns, data types, primary keys, indexes, and constraints. Generate migration scripts for Vercel Postgres.",
+    "assignee_role": "database_engineer",
+    "priority": 1,
+    "dependencies": []
+  },
+  {
+    "title": "Implement contact form API route with validation, rate limiting, DB write, and email dispatch",
+    "description": "Create the serverless API route `/api/v1/contact` that validates payload with Zod, enforces rate limiting via Upstash Redis, inserts the submission into the database, and triggers an email via Resend. Return appropriate HTTP status codes.",
+    "assignee_role": "backend",
+    "priority": 2,
+    "dependencies": [
+      "Design PostgreSQL schema for contact submissions"
+    ]
+  },
+  {
+    "title": "Add health check and error handling endpoints",
+    "description": "Add a lightweight health\u2011check endpoint (`/api/v1/health`) and global error\u2011handling middleware to standardize error responses for all API routes.",
+    "assignee_role": "backend",
+    "priority": 2,
+    "dependencies": [
+      "Design PostgreSQL schema for contact submissions"
+    ]
+  },
+  {
+    "title": "Develop static marketing pages and layout components",
+    "description": "Develop static marketing pages (Home, About, Projects) and shared layout components using Next.js App Router, Tailwind CSS, and TypeScript.",
+    "assignee_role": "frontend",
+    "priority": 3,
+    "dependencies": [
+      "Implement contact form API route with validation, rate limiting, DB write, and email dispatch",
+      "Add health check and error handling endpoints"
+    ]
+  },
+  {
+    "title": "Build responsive contact form UI with React Hook Form and Zod integration",
+    "description": "Build a responsive contact form UI using React Hook Form and Zod schema integration, connecting it to the `/api/v1/contact` endpoint and handling success/error states.",
+    "assignee_role": "frontend",
+    "priority": 3,
+    "dependencies": [
+      "Implement contact form API route with validation, rate limiting, DB write, and email dispatch",
+      "Add health check and error handling endpoints"
+    ]
+  },
+  {
+    "title": "Execute functional end\u2011to\u2011end tests for API and UI",
+    "description": "Run automated end\u2011to\u2011end functional tests (e.g., Cypress) covering page navigation, form submission flow, validation errors, rate\u2011limit responses, and email dispatch verification.",
+    "assignee_role": "qa",
+    "priority": 4,
+    "dependencies": [
+      "Implement contact form API route with validation, rate limiting, DB write, and email dispatch",
+      "Add health check and error handling endpoints",
+      "Develop static marketing pages and layout components",
+      "Build responsive contact form UI with React Hook Form and Zod integration"
+    ]
+  },
+  {
+    "title": "Perform accessibility (WCAG 2.1 AA) and performance (Lighthouse) testing",
+    "description": "Perform WCAG\u202f2.1\u202fAA accessibility audit and Lighthouse performance audit (score \u2265\u202f90) on all pages and the contact form workflow.",
+    "assignee_role": "qa",
+    "priority": 4,
+    "dependencies": [
+      "Implement contact form API route with validation, rate limiting, DB write, and email dispatch",
+      "Add health check and error handling endpoints",
+      "Develop static marketing pages and layout components",
+      "Build responsive contact form UI with React Hook Form and Zod integration"
+    ]
+  },
+  {
+    "title": "Conduct code review and merge approval",
+    "description": "Conduct code review, ensure adherence to coding standards, verify test coverage, and approve merge to main branch.",
+    "assignee_role": "reviewer",
+    "priority": 5,
+    "dependencies": [
+      "Execute functional end\u2011to\u2011end tests for API and UI",
+      "Perform accessibility (WCAG 2.1 AA) and performance (Lighthouse) testing"
+    ]
+  },
+  {
+    "title": "Run security review: OWASP, rate\u2011limit verification, CSP headers",
+    "description": "Run a security review covering OWASP Top\u202f10, verify CSP headers, rate\u2011limit configuration, input sanitization, and secret management in Vercel.",
+    "assignee_role": "security",
+    "priority": 6,
+    "dependencies": [
+      "Conduct code review and merge approval"
+    ]
+  },
+  {
+    "title": "Configure CI/CD pipeline and deploy to Vercel with environment variables",
+    "description": "Configure CI/CD pipelines (GitHub Actions), set up environment variables, and deploy the application to Vercel with automatic preview and production builds.",
+    "assignee_role": "devops",
+    "priority": 7,
+    "dependencies": [
+      "Run security review: OWASP, rate\u2011limit verification, CSP headers"
+    ]
+  }
+]
