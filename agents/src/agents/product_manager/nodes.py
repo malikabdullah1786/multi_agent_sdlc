@@ -91,8 +91,10 @@ def write_prd_node(state: ProductManagerState) -> dict:
     )
 
     response = _llm.invoke(formatted)
+    content = response.content
+    clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
-        "prd_draft": response.content,
+        "prd_draft": clean_content,
         "iteration_count": state.iteration_count + 1,
     }
 

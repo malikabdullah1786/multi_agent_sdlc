@@ -146,8 +146,10 @@ def generate_draft_node(state: PlanningState) -> dict:
     )
 
     response = _llm_draft.invoke(formatted)
+    content = response.content
+    clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
-        "plan_draft": response.content,
+        "plan_draft": clean_content,
         "iteration_count": state.iteration_count + 1,
     }
 

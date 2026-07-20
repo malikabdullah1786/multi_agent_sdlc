@@ -5,30 +5,80 @@ Tools for static application security testing (SAST), Software Composition Analy
 and Jira ticket integration for zero-days.
 """
 from langchain_core.tools import tool
+import os
+import subprocess
+from pathlib import Path
+
+_ROOT_DIR = Path(__file__).resolve().parents[5]
+_OUTPUT_DIR = _ROOT_DIR / "output"
 
 @tool
 def run_sast_scanner() -> str:
     """
-    Simulates running a Static Application Security Testing (SAST) tool like
-    Bandit (Python) or Semgrep over the generated codebase to find SQLi, XSS, etc.
+    Runs a Static Application Security Testing (SAST) tool.
+    Detects Python (bandit) or Node (basic grep for secrets as a fallback).
     """
-    # TODO: Implement local subprocess call
-    return "SAST_SCAN: 0 High, 0 Medium, 2 Low (Info) findings."
+    output_dir = _OUTPUT_DIR
+    
+    if (output_dir / "package.json").exists():
+        # A simple SAST alternative for node if eslint-plugin-security isn't installed
+        cmd = "npx --yes @nodesecure/cli --ci"
+        fallback = "grep -ir 'password\\|secret\\|token' . | head -n 20"
+    else:
+        cmd = "bandit -r . -f txt"
+        fallback = "grep -ir 'password\\|secret\\|token' . | head -n 20"
+        
+    try:
+        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=60)
+        return f"SAST_SCAN_COMPLETE:\n{res.stdout[-2000:]}"
+    except Exception:
+        # Fallback to basic secrets grep if scanner not installed
+        try:
+            res = subprocess.run(fallback, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=10)
+            return f"SAST_SCAN (Fallback Secrets Check):\n{res.stdout}"
+        except Exception as e:
+            return f"SAST_SCAN_FAILED: {e}"
 
 @tool
 def check_dependencies() -> str:
     """
-    Simulates running a Software Composition Analysis (SCA) tool like
-    Snyk or npm audit on requirements.txt / package.json.
+    Runs a Software Composition Analysis (SCA) tool (e.g., npm audit).
     """
-    # TODO: Implement local subprocess call
-    return "DEPENDENCY_SCAN: 0 vulnerabilities found."
+    output_dir = _OUTPUT_DIR
+    
+    if (output_dir / "package.json").exists():
+        cmd = "npm audit --audit-level=high"
+    elif (output_dir / "requirements.txt").exists():
+        cmd = "pip-audit -r requirements.txt"
+    else:
+        return "DEPENDENCY_SCAN_SKIPPED: No package.json or requirements.txt found."
+        
+    try:
+        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=60)
+        if res.returncode == 0:
+            return "DEPENDENCY_SCAN_PASSED: 0 vulnerabilities found."
+        else:
+            return f"DEPENDENCY_SCAN_WARNINGS:\n{res.stdout[-2000:]}"
+    except Exception as e:
+        return f"DEPENDENCY_SCAN_FAILED: {e}"
 
 @tool
 def file_security_ticket(cve_title: str, severity: str, mitigation: str) -> str:
     """
-    Files a high-priority security ticket directly to Jira via the Jira MCP
-    if a critical vulnerability is found that blocks deployment.
+    Files a high-priority security ticket directly to a local file (since Jira is mocked).
     """
-    # TODO: Connect to Jira MCP
-    return f"MOCK: Security ticket logged as SEC-402 for {cve_title} ({severity})"
+    tickets_file = _OUTPUT_DIR / "SECURITY_TICKETS.md"
+    
+    import time
+    ticket_id = f"SEC-{int(time.time())}"
+    
+    report = f"## [{ticket_id}] {cve_title}\n"
+    report += f"**Severity:** {severity}\n\n"
+    report += f"**Mitigation Plan:**\n{mitigation}\n\n"
+    report += "---\n\n"
+    
+    tickets_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(tickets_file, "a", encoding="utf-8") as f:
+        f.write(report)
+        
+    return f"SUCCESS: Security ticket logged as {ticket_id} in {tickets_file.name}"

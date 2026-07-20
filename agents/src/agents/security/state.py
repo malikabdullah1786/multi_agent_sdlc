@@ -14,4 +14,6 @@ class SecurityState(BaseModel):
     security_report: str = Field(default="", description="Generated summary of found vulnerabilities")
     
     # ── Outputs ─────────────────────────────────────────────────────────────────
-    security_approved: bool = Field(default=False, description="True if no CRITICAL/HIGH vulnerabilities were found")
+    security_approved: bool = Field(default=False, description="True if no blockers found")
+    new_workflow_tasks: List[Dict[str, Any]] = Field(default_factory=list, description="New tasks to fix vulnerabilities")
+    internal_vulnerabilities: List[Dict[str, Any]] = Field(default_factory=list, description="Internal parsed vulns")

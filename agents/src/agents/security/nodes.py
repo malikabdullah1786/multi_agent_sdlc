@@ -2,21 +2,32 @@
 Security Agent — Node Functions
 
 Flow:
-  run_sast → check_deps → analyze_vulnerabilities → enforce_security_gate
+  pop_task → run_sast → check_deps → analyze_vulnerabilities → enforce_security_gate → mark_task_complete → pop_task
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
+from pydantic import BaseModel, Field
+from typing import Dict, Any, List
 
 from agents.src.agents.security.state import SecurityState
-from typing import Dict, Any
 from agents.src.agents.security.tools import (
     run_sast_scanner,
     check_dependencies,
     file_security_ticket
 )
 
-_llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
+_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=4000)
+
+class Vulnerability(BaseModel):
+    title: str = Field(description="CVE or brief title of the vulnerability")
+    severity: str = Field(description="Severity (CRITICAL, HIGH, MEDIUM, LOW)")
+    mitigation: str = Field(description="How to fix this vulnerability")
+
+class SecurityAnalysis(BaseModel):
+    is_approved: bool = Field(description="True if NO critical/high vulns exist, False otherwise")
+    report: str = Field(description="Brief summary report of findings")
+    vulnerabilities: List[Vulnerability] = Field(description="Extracted high/critical vulnerabilities")
 
 # ---------------------------------------------------------------------------
 # 1. Run SAST Node
@@ -39,7 +50,7 @@ def check_deps_node(state: SecurityState) -> dict:
 # ---------------------------------------------------------------------------
 def analyze_vulnerabilities_node(state: SecurityState) -> dict:
     """
-    Evaluates the SAST and SCA reports. Determines if there are critical blockers.
+    Evaluates the SAST and SCA reports using LLM structure.
     """
     prompt = PromptTemplate.from_template(
         """You are a Principal AppSec Engineer.
@@ -48,9 +59,8 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
         SAST Report: {sast}
         Dependencies Report: {deps}
         
-        If there are any CRITICAL or HIGH vulnerabilities, start your response with 'REJECT'.
-        Otherwise, start your response with 'APPROVE'. 
-        Provide a brief summary report of the findings.
+        If there are any CRITICAL or HIGH vulnerabilities, set is_approved to False and extract the vulnerabilities.
+        Otherwise, set is_approved to True.
         """
     )
     
@@ -59,14 +69,13 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
         deps=state.dependency_vulnerabilities
     )
     
-    response = _llm.invoke(formatted)
-    
-    content = response.content
-    is_approved = content.strip().upper().startswith("APPROVE")
+    structured_llm = _llm.with_structured_output(SecurityAnalysis)
+    response = structured_llm.invoke(formatted)
     
     return {
-        "security_report": content,
-        "security_approved": is_approved
+        "security_report": response.report,
+        "security_approved": response.is_approved,
+        "internal_vulnerabilities": [v.dict() for v in response.vulnerabilities]
     }
 
 # ---------------------------------------------------------------------------
@@ -87,18 +96,34 @@ def mark_task_complete_node(state: SecurityState) -> dict:
 # ---------------------------------------------------------------------------
 def enforce_security_gate_node(state: SecurityState) -> dict:
     """
-    If rejected, optionally files Jira security tickets.
-    The orchestrator relies on the boolean flag to halt the pipeline.
+    If rejected, files Jira security tickets and SPAWNS dynamic tasks for developers to fix.
     """
+    new_tasks = []
+    
     if not state.security_approved:
-        try:
-            # mock filing a ticket
-            file_security_ticket.invoke({
-                "cve_title": "Pipeline blocked due to SAST findings",
-                "severity": "HIGH",
-                "mitigation": "Review the security report and fix the code."
-            })
-        except Exception:
-            pass
+        import time
+        vulns = state.get("internal_vulnerabilities", [])
+        
+        if not vulns:
+            # Fallback if the LLM flagged but didn't extract specific items
+            vulns = [{"title": "General Security Block", "severity": "HIGH", "mitigation": "Review SAST logs"}]
             
-    return {}
+        for v in vulns:
+            file_security_ticket.invoke({
+                "cve_title": v.get("title", "Vuln"),
+                "severity": v.get("severity", "HIGH"),
+                "mitigation": v.get("mitigation", "Fix code")
+            })
+            
+            # Spawn a new task for the orchestrator
+            new_tasks.append({
+                "id": f"task-sec-{int(time.time())}",
+                "title": f"Fix Security Vulnerability: {v.get('title')}",
+                "description": f"Security scan found a {v.get('severity')} vulnerability.\n\nMitigation:\n{v.get('mitigation')}",
+                "assignee_role": "backend", # Usually backend handles sec fixes
+                "dependencies": [],
+                "priority": 1 # Security fixes are top priority
+            })
+            time.sleep(1)
+            
+    return {"new_workflow_tasks": new_tasks}

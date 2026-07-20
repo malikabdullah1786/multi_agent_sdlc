@@ -18,3 +18,4 @@ class QAState(BaseModel):
 
     # ── Output ─────────────────────────────────────────────────────────────────
     all_tests_passed: bool = Field(default=False, description="True if the test suite is completely green")
+    new_workflow_tasks: List[Dict[str, Any]] = Field(default_factory=list, description="New tasks generated if bugs are found")

@@ -7,6 +7,7 @@ Flow:
   → finalize_design
 """
 from pathlib import Path
+import re
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 from langgraph.types import interrupt
@@ -15,7 +16,7 @@ from agents.src.agents.architect.tools import rag_search, validate_schema, lint_
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = ChatGroq(model="qwen/qwen3.6-27b", temperature=0.1, max_tokens=2500)  # Low temp for precise technical output
+_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=2500)  # Low temp for precise technical output
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
@@ -73,8 +74,10 @@ def design_draft_node(state: ArchitectState) -> dict:
         self_critique=state.self_critique_notes or "No previous critique.",
     )
     response = _llm.invoke(formatted)
+    content = response.content
+    clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
-        "system_design_draft": response.content,
+        "system_design_draft": clean_content,
         "iteration_count": state.iteration_count + 1,
     }
 # ---------------------------------------------------------------------------

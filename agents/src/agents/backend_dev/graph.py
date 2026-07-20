@@ -22,15 +22,16 @@ from agents.src.agents.backend_dev.nodes import (
     write_code_node,
     lint_code_node,
     run_tests_node,
-    mark_task_complete_node
+    mark_task_complete_node,
+    push_to_github_node
 )
 
 # ---------------------------------------------------------------------------
 # Router: Is Queue Empty?
 # ---------------------------------------------------------------------------
 def _is_queue_empty(state: BackendDevState) -> str:
-    """If there is no current task after popping, we are done."""
-    return "END" if state.current_task is None else "write_code"
+    """If there is no current task after popping, route to GitHub push."""
+    return "push_to_github" if state.current_task is None else "write_code"
 
 # ---------------------------------------------------------------------------
 # Router: Did Linter Pass?
@@ -63,6 +64,7 @@ workflow.add_node("write_code", write_code_node)
 workflow.add_node("lint_code", lint_code_node)
 workflow.add_node("run_tests", run_tests_node)
 workflow.add_node("mark_task_complete", mark_task_complete_node)
+workflow.add_node("push_to_github", push_to_github_node)
 
 # Flow execution
 workflow.add_edge(START, "pop_task")
@@ -73,9 +75,12 @@ workflow.add_conditional_edges(
     _is_queue_empty,
     {
         "END": END,
+        "push_to_github": "push_to_github",
         "write_code": "write_code"
     }
 )
+
+workflow.add_edge("push_to_github", END)
 
 workflow.add_edge("write_code", "lint_code")
 
@@ -103,3 +108,41 @@ workflow.add_conditional_edges(
 workflow.add_edge("mark_task_complete", "pop_task")
 
 backend_dev_subgraph = workflow.compile(checkpointer=MemorySaver())
+
+if __name__ == "__main__":
+    from langchain_core.runnables import RunnableConfig
+    from pathlib import Path
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    
+    # Read the actual design doc for testing
+    root_dir = Path(__file__).resolve().parents[4]
+    design_path = root_dir / "final_design.md"
+    try:
+        design_content = design_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"Could not find design doc at {design_path}")
+        design_content = "No design found."
+        
+    initial_state = BackendDevState(
+        final_design_doc=design_content,
+        db_connection_string="mock_db_connection_string",
+        workflow_tasks=[{"task_id": "backend_api_1", "description": "Create the POST /api/v1/contact endpoint for the contact form submissions, including Zod validation and Postgres insert. Ensure standard Next.js 14 API route structure."}],
+    )
+    
+    config = RunnableConfig(recursion_limit=50, configurable={"thread_id": "test_thread"})
+    print("Starting Backend Developer Agent...")
+    
+    for event in backend_dev_subgraph.stream(initial_state, config=config):
+        for node_name, state_update in event.items():
+            print(f"\n--- Node: {node_name} ---")
+            if "current_code_draft" in state_update:
+                print("Code drafted.")
+            if "linter_errors" in state_update and state_update["linter_errors"]:
+                print(f"Linter Errors: {state_update['linter_errors']}")
+            if "test_failures" in state_update and state_update["test_failures"]:
+                print(f"Test Failures: {state_update['test_failures']}")
+                
+    print("\nBackend Developer finished.")

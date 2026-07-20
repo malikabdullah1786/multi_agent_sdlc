@@ -12,7 +12,7 @@ from langchain_groq import ChatGroq
 
 from agents.src.agents.task_breakdown.state import TaskBreakdownState
 
-_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.1, max_tokens=4500)
+_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=4000)
 
 # ---------------------------------------------------------------------------
 # 1. Generate Tasks Node

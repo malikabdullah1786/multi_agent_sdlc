@@ -11,6 +11,7 @@ from agents.src.agents.reviewer.state import ReviewerState
 from agents.src.agents.reviewer.nodes import (
     analyze_complexity_node,
     review_code_node,
+    submit_review_node,
     pop_task_node,
     mark_task_complete_node
 )
@@ -30,13 +31,15 @@ workflow = StateGraph(ReviewerState)
 workflow.add_node("pop_task", pop_task_node)
 workflow.add_node("analyze_complexity", analyze_complexity_node)
 workflow.add_node("review_code", review_code_node)
+workflow.add_node("submit_review", submit_review_node)
 workflow.add_node("mark_task_complete", mark_task_complete_node)
 
 # Flow execution
 workflow.add_edge(START, "pop_task")
 workflow.add_conditional_edges("pop_task", _is_queue_empty, {"END": END, "analyze_complexity": "analyze_complexity"})
 workflow.add_edge("analyze_complexity", "review_code")
-workflow.add_edge("review_code", "mark_task_complete")
+workflow.add_edge("review_code", "submit_review")
+workflow.add_edge("submit_review", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
 reviewer_subgraph = workflow.compile(checkpointer=MemorySaver())
