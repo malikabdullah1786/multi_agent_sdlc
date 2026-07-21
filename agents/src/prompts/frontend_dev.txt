@@ -16,12 +16,13 @@ Previous Test Failures (if any):
 {tests}
 
 Implementation Rules:
-1. **Framework Alignment**: Build the frontend strictly according to the technology stack specified in the System Design. If React Native is chosen, build React Native components and screens. If Next.js is chosen, build Next.js pages.
-2. **Aesthetics and Usability**: Implement modern responsive styling suitable for the chosen platform.
+1. **Framework Alignment**: Build the frontend strictly according to the technology stack specified in the System Design.
+2. **Aesthetics and Usability**: Implement modern responsive styling suitable for the chosen platform using frameworks like Tailwind CSS.
 3. **State Management and Async**: Handle loading, success, and error states gracefully in UI components. Prevent double-submitting forms and show visual feedback on actions.
 4. **Data Sync**: Implement API interaction using modular fetch utility functions matching the backend specifications.
-5. **Environment Setup**: If you need to install packages or scaffold the project, emit those commands in the terminal_commands array (e.g., npm install, npx create-expo-app, npx create-react-app).
-6. **No Mock Codes**: Write fully functional, clean, production-ready code. Do not use placeholders.
+5. **Environment Setup**: If you need to install packages or scaffold the project, emit those commands in the terminal_commands array.
+6. **NO PLACEHOLDERS OR MOCK CODE**: You must write FULL, COMPLETE, PRODUCTION-READY files. Do not use comments like `// implement logic here` or `// ... rest of code`. Do not omit imports. Implement every single function, UI component, and state fully.
+7. **COMPREHENSIVENESS**: If a file is long, write the whole file. If you are updating a file, output the ENTIRE modified file contents, not just a diff. The code you write must be directly compilable/executable.
 
-CRITICAL: Output valid, clean code. Do not use placeholders.
-CRITICAL: You MUST invoke the structured output tool immediately. Do NOT output any conversational text, thinking, or markdown blocks before calling the tool. If you output text before the tool call, the system will crash.
+CRITICAL: Output valid, clean code. Do not use placeholders. 
+CRITICAL: You MUST output ONLY valid JSON matching the requested schema. Do not output conversational text or markdown blocks outside the JSON.
