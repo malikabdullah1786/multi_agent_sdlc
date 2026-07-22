@@ -9,8 +9,12 @@ import requests
 import subprocess
 from pathlib import Path
 
+# Re-export generic terminal tool so nodes can import it from this package
+from agents.src.shared.tools import run_terminal_command  # noqa: F401
+
 _ROOT_DIR = Path(__file__).resolve().parents[5]
 _OUTPUT_DIR = _ROOT_DIR / "output"
+
 
 @tool
 def run_complexity_analysis() -> str:
@@ -26,7 +30,7 @@ def run_complexity_analysis() -> str:
         # A simple file count and line count for now, plus any python/node specific tools if available
         res = subprocess.run(
             "find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | wc -l",
-            shell=True, cwd=str(output_dir), capture_output=True, text=True
+            shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace"
         )
         file_count = res.stdout.strip()
         

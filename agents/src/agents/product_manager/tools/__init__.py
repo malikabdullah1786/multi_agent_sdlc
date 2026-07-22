@@ -125,10 +125,9 @@ def create_jira_tickets(
             'summary': f"[{task.get('assignee_role', 'Unassigned')}] {task.get('title', 'Task')}",
             'description': f"{task.get('description', '')}\n\nTarget Files: {', '.join(task.get('target_files', []))}",
             'issuetype': {'name': 'Task'},
-            # In Jira Server/DC it's 'customfield_10014' for Epic Link.
-            # In Jira Cloud, it's often 'parent': {'key': epic_key} or 'customfield_XXXXX'
-            'parent': {'key': epic_key}
         }
+        if epic_key and not epic_key.startswith("STUB"):
+            issue_dict['parent'] = {'key': epic_key}
         try:
             new_issue = jira.create_issue(fields=issue_dict)
             created_keys.append(new_issue.key)

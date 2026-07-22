@@ -21,33 +21,57 @@ from agents.src.agents.devops.graph import devops_subgraph
 
 from langgraph.errors import GraphInterrupt
 
+_subgraph_counters = {}
+
 def _run_subgraph_with_interrupts(subgraph, initial_input, config):
-    # Determine if subgraph is currently paused
+    thread_id = config["configurable"]["thread_id"]
+    if thread_id not in _subgraph_counters:
+        _subgraph_counters[thread_id] = 0
+        
+    # First, if the subgraph hasn't started at all, run it with initial_input
     sub_state = subgraph.get_state(config)
-    has_sub_interrupts = any(task.interrupts for task in sub_state.tasks) if sub_state.tasks else False
-    if sub_state.next or has_sub_interrupts:
-        # Subgraph is paused. Call interrupt to consume the parent's resume value.
-        user_response = interrupt("Awaiting approval")
-        # Resume the subgraph
-        out = subgraph.invoke(Command(resume=user_response), config=config)
-    else:
-        # Subgraph is not started. Invoke it fresh.
-        out = subgraph.invoke(initial_input, config=config)
-
-    # Check if the subgraph has paused on a new interrupt
-    sub_state_after = subgraph.get_state(config)
-    sub_interrupts_after = []
-    if sub_state_after.tasks:
-        for task in sub_state_after.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                sub_interrupts_after.extend(task.interrupts)
-
-    if sub_state_after.next or sub_interrupts_after:
-        payload = sub_interrupts_after[0].value if sub_interrupts_after else "Awaiting approval"
-        # Pause the parent graph by raising an interrupt with the same payload
-        interrupt(payload)
-
-    return out
+    if not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
+        for event in subgraph.stream(initial_input, config=config):
+            pass
+            
+    local_count = 0
+    # Process any interrupts in a loop
+    while True:
+        sub_state = subgraph.get_state(config)
+        has_sub_interrupts = False
+        payload = "Awaiting approval"
+        
+        if sub_state.tasks:
+            for task in sub_state.tasks:
+                if task.interrupts:
+                    has_sub_interrupts = True
+                    payload = task.interrupts[0].value
+                    break
+                    
+        if not sub_state.next and not has_sub_interrupts:
+            break  # Subgraph is completely finished
+            
+        # Subgraph is paused. Bubble interrupt to parent.
+        user_response = interrupt(payload)
+        
+        local_count += 1
+        
+        # If we have already streamed this interrupt to the subgraph in memory,
+        # skip streaming to avoid breaking the state during LangGraph replays.
+        if local_count <= _subgraph_counters[thread_id]:
+            continue
+            
+        # We haven't streamed this one yet. Stream it!
+        _subgraph_counters[thread_id] += 1
+        
+        # Resume the subgraph with the user's response
+        for event in subgraph.stream(Command(resume=user_response), config=config):
+            for sub_node, _ in event.items():
+                if sub_node != "__interrupt__":
+                    import time
+                    print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+                    
+    return subgraph.get_state(config).values
 
 # ===========================================================================
 # WRAPPER NODES (Passing state between subgraphs)
@@ -67,9 +91,12 @@ def pm_phase_a_stage(state: WorkflowSate) -> dict:
         {"user_req": state.user_req},
         {"configurable": {"thread_id": f"{state.workflowId}-pm_a"}}
     )
+    project_name = out.get("project_name", "")
+    repo_name = project_name.lower().replace(" ", "-") if project_name else f"auto-sdlc-{state.workflowId[:6]}"
     return {
         "prd": out.get("prd", ""),
-        "project_name": out.get("project_name", "")
+        "project_name": project_name,
+        "github_repo_name": repo_name
     }
 
 def architect_stage(state: WorkflowSate) -> dict:
@@ -96,9 +123,19 @@ def task_breakdown_stage(state: WorkflowSate) -> dict:
         },
         {"configurable": {"thread_id": f"{state.workflowId}-task_breakdown"}}
     )
+    workflow_tasks = out.get("workflow_tasks", [])
+    
+    import json
+    try:
+        with open("tasks-proj.json", "w", encoding="utf-8") as f:
+            json.dump(workflow_tasks, f, indent=4)
+    except Exception as e:
+        with open("debug_tasks.txt", "w") as f:
+            f.write(str(e))
+
     return {
-        "workflow_tasks": out.get("workflow_tasks", []),
-        "active_tasks": out.get("workflow_tasks", []),
+        "workflow_tasks": workflow_tasks,
+        "active_tasks": workflow_tasks,
         "completed_task_titles": []
     }
 
@@ -184,7 +221,8 @@ def _execute_agent_subgraph(state: WorkflowSate, subgraph) -> dict:
             "final_design_doc": state.final_design_doc,
             "source_code_paths": ["/backend", "/frontend"],
             "workflow_tasks": state.active_tasks,
-            "active_pr_number": state.active_pr_number
+            "active_pr_number": state.active_pr_number,
+            "github_repo_name": state.github_repo_name
         },
         {"configurable": {"thread_id": state.workflowId}}
     )
@@ -301,7 +339,9 @@ parent_workflow.add_edge("qa_stage", "dispatcher_stage")
 parent_workflow.add_edge("reviewer_stage", "dispatcher_stage")
 parent_workflow.add_edge("security_stage", "dispatcher_stage")
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
 
-checkpointer = MemorySaver()
+conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(conn)
 orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)

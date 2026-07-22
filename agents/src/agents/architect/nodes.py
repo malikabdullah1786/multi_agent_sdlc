@@ -9,14 +9,15 @@ Flow:
 from pathlib import Path
 import re
 from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry
 from langgraph.types import interrupt
 from agents.src.agents.architect.state import ArchitectState
 from agents.src.agents.architect.tools import rag_search, validate_schema, lint_api_spec
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=2500)  # Low temp for precise technical output
+_llm = get_llm(temperature=0.1, max_tokens=4000)  # For large generation
+_llm_short = get_llm(temperature=0.1, max_tokens=1500)  # For short critiques
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
@@ -28,18 +29,31 @@ def research_node(state: ArchitectState) -> dict:
     """
     Performs technical research via Tavily web search and internal RAG.
     Searches for best practices, library docs, and similar past architectures.
+    Optionally skips this if the request is for a generic new project.
     """
+    from langchain_core.prompts import PromptTemplate
+    decision_prompt = PromptTemplate.from_template(
+        "Does this user request require researching an existing internal codebase or finding external web documentation? "
+        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
+    )
+    decision = llm_invoke_with_retry(_llm, decision_prompt.format(req=state.user_req)).content.strip().upper()
+    
+    import re
+    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
+    
+    if "YES" not in decision:
+        return {
+            "web_search_results": ["Skipped web search for new generic project."],
+            "rag_results": ["Skipped internal RAG search for new generic project."],
+        }
+        
     web_results: list[str] = []
     rag_results: list[str] = []
     # Web search for technical references (DuckDuckGo)
-    try:
-        from langchain_community.tools import DuckDuckGoSearchResults
-        ddg = DuckDuckGoSearchResults(max_results=5)
-        tech_query = f"system architecture best practices {state.project_type}"
-        raw = ddg.invoke(tech_query)
-        web_results = [str(raw)]
-    except Exception as e:
-        web_results = [f"Web search unavailable: {e}"]
+    from agents.src.shared.llm import safe_web_search
+    tech_query = f"system architecture best practices {state.project_type}"
+    web_results = safe_web_search(tech_query)
+    web_results = [web_results] if isinstance(web_results, str) else web_results
     # Internal knowledge base search for past design docs and ADRs
     rag_raw = rag_search.invoke({
         "query": f"system design architecture {state.user_req}",
@@ -61,19 +75,29 @@ def design_draft_node(state: ArchitectState) -> dict:
     """
     template_str = _load_prompt("architect.txt")
     prompt = PromptTemplate.from_template(template_str)
+
+    # Load team capabilities
+    root_dir = Path(__file__).resolve().parents[4]
+    matrix_path = root_dir / "agent_tools_matrix.md"
+    if matrix_path.exists():
+        team_capabilities = matrix_path.read_text(encoding="utf-8")
+    else:
+        team_capabilities = "No specific team capabilities documented."
+
     formatted = prompt.format(
         user_req=state.user_req,
-        prd_or_plan=state.prd or "No PRD available.",
-        web_search_results="\n\n".join(state.web_search_results) or "No web results.",
-        rag_results="\n\n".join(state.rag_results) or "No past designs found.",
+        prd_or_plan=(state.prd or "No PRD available.")[:6000],
+        team_capabilities=team_capabilities[:2000],
+        web_search_results=("\n\n".join(state.web_search_results) or "No web results.")[:2000],
+        rag_results=("\n\n".join(state.rag_results) or "No past designs found.")[:2000],
         constraints="\n".join(f"- {c}" for c in state.constraints) or "None.",
-
         schema_feedback=state.schema_feedback or "No schema feedback.",
         api_feedback=state.api_feedback or "No API feedback.",
         structure_feedback=state.structure_feedback or "No structure feedback.",
         self_critique=state.self_critique_notes or "No previous critique.",
     )
-    response = _llm.invoke(formatted)
+    llm_with_tools = _llm.bind_tools([rag_search, validate_schema, lint_api_spec])
+    response = llm_invoke_with_retry(llm_with_tools, formatted)
     content = response.content
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
@@ -128,7 +152,7 @@ def self_critique_node(state: ArchitectState) -> dict:
         If the design is complete and production-ready, respond with: DESIGN_COMPLETE
         """
     )
-    response = _llm.invoke(critique_prompt.format(
+    response = _llm_short.invoke(critique_prompt.format(
         user_req=state.user_req,
         prd=state.prd[:3000] if state.prd else "Not available.",
         draft=state.system_design_draft,

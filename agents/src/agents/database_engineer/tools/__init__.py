@@ -10,9 +10,12 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from langchain_core.tools import tool
 import os
 from pathlib import Path
-from langchain_groq import ChatGroq
+from agents.src.shared.llm import get_llm
 from langchain_core.prompts import PromptTemplate
 import re
+
+# Re-export the generic terminal tool so it can be imported from this package
+from agents.src.shared.tools import run_terminal_command  # noqa: F401
 
 # Default root connection
 DEFAULT_DB_USER = os.getenv("DB_USER", "postgres")
@@ -112,12 +115,11 @@ def validate_schema_diff(connection_string: str, design_markdown: str) -> str:
                     current_table = table_name
                 schema_dump.append(f"  - {column_name} ({data_type}, {'NULL' if is_nullable == 'YES' else 'NOT NULL'})")
                 
-            schema_text = "\n".join(schema_dump) if schema_dump else "EMPTY SCHEMA"
             db_schema_text = "\n".join(schema_dump) if schema_dump else "EMPTY SCHEMA"
         conn.close()
         
         # Use LLM to validate
-        prompt = f"""
+        prompt = PromptTemplate.from_template("""
     You are a Database Architect.
     
     Required Design:
@@ -130,10 +132,11 @@ def validate_schema_diff(connection_string: str, design_markdown: str) -> str:
     Compare the Actual Database Schema against the Required Design. 
     If the Actual Database Schema implements all tables and fields required by the design, output exactly: SCHEMA_MATCH
     If there are missing tables, incorrect types, or missing columns, list the exact SQL fixes needed to correct it.
-    """
+    """)
     
-        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=1500)
-        response = llm.invoke(prompt)
+        llm = get_llm(temperature=0.1, max_tokens=4000)
+        formatted_prompt = prompt.format(design_markdown=design_markdown, db_schema_text=db_schema_text)
+        response = llm.invoke(formatted_prompt)
         content = response.content.strip()
     
         # Strip <think> blocks so we don't pollute the context window on loop

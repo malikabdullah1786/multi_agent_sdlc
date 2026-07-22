@@ -28,3 +28,4 @@ class WorkflowSate(BaseModel):
     qa_passed: bool = Field(default=False, description="Whether E2E tests passed")
     reviewer_approved: bool = Field(default=False, description="Whether static analysis passed")
     security_approved: bool = Field(default=False, description="Whether security scan passed")
+    github_repo_name: str = Field(default="", description="The repository name for GitHub API calls")

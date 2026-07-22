@@ -23,7 +23,8 @@ from agents.src.agents.database_engineer.nodes import (
     execute_migrations_node,
     validate_schema_node,
     pop_task_node,
-    mark_task_complete_node
+    mark_task_complete_node,
+    push_to_github_node
 )
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ def _should_revise_migrations(state: DatabaseEngineerState) -> str:
     max_iterations = 3
     if not state.db_schema_ready and state.iteration_count < max_iterations:
         return "write_migrations"
-    return "mark_task_complete"
+    return "push_to_github"
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ workflow.add_node("setup_db", setup_db_node)
 workflow.add_node("write_migrations", write_migrations_node)
 workflow.add_node("execute_migrations", execute_migrations_node)
 workflow.add_node("validate_schema", validate_schema_node)
+workflow.add_node("push_to_github", push_to_github_node)
 workflow.add_node("mark_task_complete", mark_task_complete_node)
 
 # Flow execution
@@ -73,9 +75,10 @@ workflow.add_conditional_edges(
     _should_revise_migrations,
     {
         "write_migrations": "write_migrations",
-        "mark_task_complete": "mark_task_complete"
+        "push_to_github": "push_to_github"
     }
 )
+workflow.add_edge("push_to_github", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
 database_engineer_subgraph = workflow.compile(checkpointer=MemorySaver())

@@ -7,7 +7,8 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
+from agents.src.shared.llm import get_llm
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from dotenv import load_dotenv
 import json
 import os
@@ -20,13 +21,17 @@ from agents.src.agents.backend_dev.tools import (
     code_linter,
     run_unit_tests,
     semantic_code_search,
-    db_schema_inspector
+    db_schema_inspector,
+    read_file_range
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 _ROOT_DIR = Path(__file__).resolve().parents[4]
 
-_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=4000)
+# ---------------------------------------------------------------------------
+# LLM setup
+# ---------------------------------------------------------------------------
+_llm = get_llm(temperature=0.1, max_tokens=4000)
 
 # ---------------------------------------------------------------------------
 # 1. Pop Task Node
@@ -63,6 +68,47 @@ class CodeGenerationResponse(BaseModel):
     terminal_commands: List[str] = Field(default_factory=list, description="List of shell commands to execute to set up the environment, e.g. ['npm install zod', 'npm install pg']")
     files: List[GeneratedFile] = Field(description="List of files to generate or update")
 
+def _get_codebase_summary() -> str:
+    output_dir = _ROOT_DIR / "output"
+    if not output_dir.exists():
+        return "No generated code found yet."
+        
+    code_blocks = []
+    omitted_files = []
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css"}
+    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
+    
+    MAX_TOTAL_CHARS = 50000
+    current_total_chars = 0
+    
+    for path in sorted(output_dir.rglob("*")):
+        if path.is_file():
+            if any(part in ignored_dirs for part in path.parts):
+                continue
+            if path.suffix in allowed_extensions:
+                rel_path = path.relative_to(_ROOT_DIR)
+                if current_total_chars >= MAX_TOTAL_CHARS:
+                    omitted_files.append(str(rel_path))
+                    continue
+                    
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    if len(content) > 8000:
+                        content = content[:8000] + "\n... [TRUNCATED] ..."
+                    block = f"File: {rel_path}\n```\n{content}\n```"
+                    code_blocks.append(block)
+                    current_total_chars += len(block)
+                except Exception as e:
+                    code_blocks.append(f"File: {rel_path} (Error: {e})")
+                    
+    if not code_blocks and not omitted_files:
+        return "No files generated yet."
+        
+    res = "\n\n".join(code_blocks)
+    if omitted_files:
+        res += "\n\n### Omitted files due to context limits:\n" + "\n".join(f"- {f}" for f in omitted_files)
+    return res
+
 # ---------------------------------------------------------------------------
 # 2. Write Code Node
 # ---------------------------------------------------------------------------
@@ -79,46 +125,132 @@ def write_code_node(state: BackendDevState) -> dict:
     if db_file.exists():
         db_schema = db_file.read_text(encoding="utf-8")
         
+    existing_code = _get_codebase_summary()
+        
     formatted = prompt.format(
         design_doc=state.final_design_doc,
         tasks=str(state.current_task),
-        db_changes=db_schema
+        db_changes=db_schema,
+        existing_code=existing_code,
+        linter_errors=state.linter_errors or 'No errors',
+        test_failures=state.test_failures or 'No failures',
     )
     
     formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"terminal_commands\": [\"cmd1\", \"cmd2\"],\n  \"files\": [\n    {\"path\": \"src/file.ts\", \"content\": \"raw code\"}\n  ]\n}\n\nDo not use markdown wrappers unless wrapping the entire JSON block in ```json ... ```. Your output MUST parse successfully via json.loads()."
     
+    from langchain_core.tools import tool
+    from agents.src.shared.llm import safe_web_search
+    from agents.src.shared.tools import run_terminal_command
+    
+    @tool
+    def search_web(query: str) -> str:
+        """Searches the web for documentation, tutorials, or solutions to coding problems."""
+        return safe_web_search(query)
+        
+    # Bind tools to the LLM
+    llm_with_tools = _llm.bind_tools([read_file_range, semantic_code_search, search_web, run_terminal_command])
+    
+    # Inform the agent it can execute terminal commands, read chunks or search existing code
+    formatted += "\n\nNote: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command in the project directory, call `semantic_code_search` to locate code patterns, call `read_file_range` to view files, or call `search_web` to look up docs. Gather whatever context you need first. Once ready, output your final file generation response."
+    formatted += "\n\nCRITICAL RULE: DO NOT use tool calling for your final JSON output. You MUST output your final JSON directly in your message text response, surrounded by ```json ... ```. If you wrap your final JSON in a tool call (like 'json' or 'CodeGenerationResponse'), it will crash the system."
+    
+    messages = [
+        SystemMessage(content=formatted),
+        HumanMessage(content="Start your implementation. You can execute shell commands with `run_terminal_command`, search the codebase with `semantic_code_search`, or read files with `read_file_range`. When done, output the final code JSON as plain text.")
+    ]
+    
     generated_code_dump = []
     
     try:
-        response = _llm.invoke(formatted)
+        # Loop for up to 4 turns of tool execution
+        for turn in range(4):
+            try:
+                response = llm_with_tools.invoke(messages)
+            except Exception as invoke_e:
+                error_str = str(invoke_e)
+                # Catch Groq tool_use_failed exceptions where it puts the payload in failed_generation
+                if "failed_generation" in error_str:
+                    fg_idx = error_str.find("'failed_generation': '")
+                    if fg_idx != -1:
+                        start_idx = fg_idx + len("'failed_generation': '")
+                        end_idx = error_str.rfind("'}}")
+                        if end_idx == -1 or end_idx <= start_idx:
+                            end_idx = error_str.rfind("'")
+                        try:
+                            raw_fg = error_str[start_idx:end_idx].replace("\\n", "\n").replace("\\'", "'")
+                            failed_gen = json.loads(raw_fg, strict=False)
+                            args = failed_gen.get("arguments", {})
+                            class DummyResponse:
+                                content = json.dumps(args) if isinstance(args, dict) else str(args)
+                                tool_calls = []
+                            response = DummyResponse()
+                        except Exception:
+                            raise invoke_e
+                    else:
+                        raise invoke_e
+                else:
+                    raise invoke_e
+                    
+            if hasattr(response, "messages"):
+                 pass # it's a real response
+            
+            messages.append(response)
+            
+            if not response.tool_calls:
+                break
+                
+            # Process tool calls
+            for tool_call in response.tool_calls:
+                if tool_call["name"] == "read_file_range":
+                    # Execute tool physically
+                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
+                    result = read_file_range.invoke(tool_call["args"])
+                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                elif tool_call["name"] == "semantic_code_search":
+                    # Execute tool physically
+                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
+                    result = semantic_code_search.invoke(tool_call["args"])
+                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                elif tool_call["name"] == "search_web":
+                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
+                    result = search_web.invoke(tool_call["args"])
+                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                elif tool_call["name"] == "run_terminal_command":
+                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
+                    result = run_terminal_command.invoke(tool_call["args"])
+                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                    
+        final_content = messages[-1].content
         
+        # Now parse final_content as the code JSON response
         output_dir = _ROOT_DIR / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         import re
-        content = response.content
-        match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+        match = re.search(r'```(?:json)?\s*(.*?)\s*```', final_content, re.DOTALL)
         if match:
             content = match.group(1)
         else:
-            start = content.find('{')
-            end = content.rfind('}')
+            start = final_content.find('{')
+            end = final_content.rfind('}')
             if start != -1 and end != -1:
-                content = content[start:end+1]
+                content = final_content[start:end+1]
+            else:
+                content = final_content
                 
         data = json.loads(content, strict=False)
         
         # Execute terminal commands
         for cmd in data.get("terminal_commands", []):
-            BLOCKED_PREFIXES = [
-                "npx create-", "npm init", "yarn create", "npm run dev",
-                "npm run start", "npm start", "node server", "python manage.py runserver",
-                "flask run", "uvicorn", "npx next dev", "npx ts-jest", "npx prisma"
+            # Only block infinite blocking dev server daemons that hang execution
+            DAEMON_SERVER_PREFIXES = [
+                "npm run dev", "npm run start", "npm start", "node server", 
+                "python manage.py runserver", "flask run", "uvicorn", "npx next dev"
             ]
             
-            if any(cmd.strip().startswith(prefix) for prefix in BLOCKED_PREFIXES):
-                print(f"Backend Dev skipped (interactive): {cmd}")
-                generated_code_dump.append(f"Skipped interactive command: {cmd}")
+            if any(cmd.strip().startswith(prefix) for prefix in DAEMON_SERVER_PREFIXES):
+                print(f"Backend Dev skipped (infinite server daemon): {cmd}")
+                generated_code_dump.append(f"Skipped background server daemon: {cmd}")
                 continue
             
             if cmd.startswith("npm install") and "--legacy-peer-deps" not in cmd:
@@ -126,12 +258,15 @@ def write_code_node(state: BackendDevState) -> dict:
             
             print(f"Backend Dev executing: {cmd}")
             try:
-                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, check=False, timeout=120)
-                generated_code_dump.append(f"Command '{cmd}' succeeded.\n{res.stdout}")
+                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=200)
+                if(res.returncode!=0):
+                    generated_code_dump.append(f"Command {cmd} failed with output {res.stdout}\n")
+                else:
+                    generated_code_dump.append(f"Command '{cmd}' succeeded.\n")
             except subprocess.TimeoutExpired:
                 print(f"Command '{cmd}' timed out. Skipping.")
                 generated_code_dump.append(f"Command '{cmd}' timed out.")
-        
+    
         # Write files
         for f in data.get("files", []):
             file_content = f.get("content", "")
@@ -140,7 +275,9 @@ def write_code_node(state: BackendDevState) -> dict:
                 file_content = re.sub(r'//.*?\n', '\n', file_content)
                 file_content = re.sub(r'/\*.*?\*/', '', file_content, flags=re.DOTALL)
             
-            file_path = output_dir / f.get("path", "")
+            clean_path = f.get("path", "").lstrip("/")
+            if clean_path.startswith("output/"): clean_path = clean_path[7:]
+            file_path = output_dir / clean_path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(file_content, encoding="utf-8")
             print(f"Backend Dev wrote: {file_path.relative_to(_ROOT_DIR)}")
@@ -149,7 +286,7 @@ def write_code_node(state: BackendDevState) -> dict:
     except Exception as e:
         print(f"Raw JSON parsing failed: {e}")
         generated_code_dump.append(f"Error generating code: {e}")
-    
+        
     return {
         "current_code_draft": "\n\n".join(generated_code_dump),
         "iteration_count": state.iteration_count + 1
@@ -192,7 +329,7 @@ def mark_task_complete_node(state: BackendDevState) -> dict:
         if state.current_code_draft:
             changes.append({
                 "task_title": state.current_task.get("title", "Unknown"),
-                "content": state.current_code_draft
+                "status": "completed"
             })
         
     return {
@@ -205,7 +342,17 @@ def mark_task_complete_node(state: BackendDevState) -> dict:
 # 6. GitHub Push Node
 # ---------------------------------------------------------------------------
 def push_to_github_node(state: BackendDevState) -> dict:
-    """Pushes the current output directory to GitHub."""
+    """Pushes the current output directory to GitHub with a descriptive commit."""
     from agents.src.shared.github import push_to_github
-    res = push_to_github(state.github_repo_name, "Backend Developer Agent")
+    current_task = state.current_task or {}
+    context = {
+        "project_name":      getattr(state, "project_name", "") or "",
+        "task_title":        current_task.get("title", "") if isinstance(current_task, dict) else "",
+        "task_description":  current_task.get("description", "") if isinstance(current_task, dict) else "",
+        "completed_tasks":   list(getattr(state, "completed_task_titles", []) or []),
+        "files_changed":     list(getattr(state, "final_file_changes", []) or []),
+        "scope":             "api",
+        "linter_clean":      not bool(getattr(state, "linter_errors", "")),
+    }
+    res = push_to_github(state.github_repo_name, "Backend Developer Agent", context=context)
     return {"active_pr_number": res.get("pr_number", 0)}

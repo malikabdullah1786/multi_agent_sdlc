@@ -14,8 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agents.src.shared.llm import get_llm
 from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
 from langgraph.types import interrupt
 
 from agents.src.agents.planning.state import PlanningState
@@ -24,16 +24,12 @@ from agents.src.agents.planning.tools import rag_search, parse_structured_output
 # ---------------------------------------------------------------------------
 # LLM setup  (swap model / provider to your preference)
 # ---------------------------------------------------------------------------
-_llm_draft = ChatGroq(
-    model="qwen/qwen3.6-27b",
-    temperature=0.7,
-    max_tokens=4000  # Give as much as possible to the draft
-)
 
-_llm_critique = ChatGroq(
-    model="qwen/qwen3.6-27b",
+_llm_draft = get_llm(temperature=0.7, max_tokens=4000)
+
+_llm_critique = get_llm(
     temperature=0.7,
-    max_tokens=2000  # Restrict critique to avoid blowing out 8000 TPM limit
+    max_tokens=4000
 )
 
 # ---------------------------------------------------------------------------
@@ -53,22 +49,31 @@ def _load_prompt(filename: str) -> str:
 
 def research_node(state: PlanningState) -> dict:
     """
-    Gather external web search results and internal RAG knowledge base results.
-    Web search is performed via Tavily; RAG via the internal pipeline.
+    Decides whether to perform RAG/web search based on the user request.
+    If the request is a simple "create a new project from scratch", skips search to save time.
     """
+    decision_prompt = PromptTemplate.from_template(
+        "Does this user request require researching an existing internal codebase or finding external web documentation? "
+        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
+    )
+    decision = _llm_critique.invoke(decision_prompt.format(req=state.user_req)).content.strip().upper()
+    
+    # Strip out any <think> blocks
+    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
+    
+    if "YES" not in decision:
+        return {
+            "web_search_results": ["Skipped web search for new generic project."],
+            "rag_results": ["Skipped internal RAG search for new generic project."],
+        }
+
     # --- RAG search ---
     rag_result = rag_search.invoke({"query": state.user_req, "k": 5})
     rag_results = [rag_result] if rag_result else []
 
-    # --- DuckDuckGo web search (lazy import so missing package doesn't break other agents) ---
-    web_results = []
-    try:
-        from langchain_community.tools import DuckDuckGoSearchResults
-        ddg = DuckDuckGoSearchResults(max_results=5)
-        raw = ddg.invoke(state.user_req)
-        web_results = [str(raw)]
-    except Exception as e:
-        web_results = [f"Web search unavailable: {e}"]
+    # --- DuckDuckGo web search ---
+    from agents.src.shared.llm import safe_web_search
+    web_results = safe_web_search(state.user_req)
 
     return {
         "web_search_results": web_results,

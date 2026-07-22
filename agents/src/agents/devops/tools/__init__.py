@@ -8,6 +8,7 @@ import subprocess
 import requests
 import time
 from pathlib import Path
+from agents.src.shared.tools import run_terminal_command
 
 _ROOT_DIR = Path(__file__).resolve().parents[5]
 _OUTPUT_DIR = _ROOT_DIR / "output"
@@ -34,6 +35,8 @@ def validate_iac_config(iac_code: str, config_type: str = "auto") -> str:
             cwd=str(output_dir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30
         )
         if res.returncode == 0:
@@ -57,6 +60,8 @@ def run_deployment(plan: str) -> str:
             cwd=str(output_dir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True
         )
         return f"DEPLOYMENT_SUCCESS: Containers started.\n{res.stdout}"

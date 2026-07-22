@@ -45,15 +45,10 @@ def _should_revise_after_critique(state: ArchitectState) -> str:
     If the self-critique or validators found significant issues and we haven't
     exceeded 3 iterations, loop back to regenerate the draft.
     """
-    max_iterations = 3
+    max_iterations = 1
     has_issues = (
         state.self_critique_notes
         and "DESIGN_COMPLETE" not in state.self_critique_notes.upper()
-        and (
-            "SCHEMA_VALID" not in state.schema_validation_notes
-            or "API_SPEC_VALID" not in state.api_validation_notes
-            or True  # always check critique
-        )
         and state.iteration_count < max_iterations
     )
     return "design_draft" if has_issues else "approve_schema"

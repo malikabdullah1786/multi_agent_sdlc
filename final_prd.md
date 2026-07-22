@@ -1,67 +1,44 @@
-# Product Requirements Document (PRD)
-**Product Name:** TaskFlow – Personal Productivity Todo App  
-**Version:** 1.0 (MVP)  
-**Status:** Draft  
-**Complexity:** Medium  
-**Author:** Elite Lead Product Manager  
+# Product Requirements Document
 
----
+## 1. Overview & Goals
+- **Core Problem**: Lack of a lightweight, centralized system to capture and track discrete tasks.
+- **User Benefit**: Reduced cognitive load via externalized task management and visual progress tracking.
+- **KPIs**: Task Completion Rate (TCR), Daily Active Users (DAU), Average Time to Task Creation.
 
-## 1. Product Overview & Goals
+## 2. Personas (Compact)
+- **Casual User**: Wants to quickly jot down daily chores and check them off.
+- **Power User**: Needs organized lists and rapid task manipulation to manage complex workflows.
 
-### 1.1 Problem Statement
-Users struggle with cognitive overload and task fragmentation. Existing solutions are either too simplistic (lacking organization) or overly complex (bloatware for personal use). Users need a streamlined, responsive, and reliable tool to capture, organize, and manage daily tasks without friction.
+## 3. User Stories & Epics (Dense List)
+* **Task Management** As a user, I want to create, edit, and delete tasks so that my list remains current.
+  - AC: [1] Given empty input, when clicking 'Add', then prevent submission. [2] Given existing task, when clicking 'Edit', then update text and save. [3] Given task item, when clicking 'Delete', then remove from state/DB.
+* **State Tracking** As a user, I want to toggle task completion so that I can distinguish finished work from pending work.
+  - AC: [1] Given pending task, when clicking checkbox, then mark as complete and apply strikethrough. [2] Given completed task, when clicking checkbox, then revert to pending.
+* **Persistence** As a user, I want my tasks saved across sessions so that I don't lose data on refresh.
+  - AC: [1] Given task change, when page reloads, then restore state from storage. [2] Given app launch, when no data exists, then show empty state.
 
-### 1.2 Core User Benefits
-- **Reduced Cognitive Load:** Centralized task management reduces mental clutter.
-- **Actionable Prioritization:** Visual cues for priority and due dates help users focus on what matters.
-- **Frictionless Workflow:** Instant search, filtering, and responsive design ensure tasks are managed anywhere, anytime.
-- **Data Integrity:** Robust error handling and persistence ensure no task is lost due to technical failures.
+## 4. Functional Specs (Bullet Tree)
+- **Main Dashboard**
+  - **Input Component**: Text field (max 256 chars) + Add Button.
+    - `Submit` -> Success: Task added to list, input cleared; Error: Validation alert if empty.
+  - **Task List Component**: Dynamic list of task items.
+    - `Toggle Complete` -> Success: Update `is_completed` boolean in DB; Error: Retry sync.
+    - `Edit Text` -> Success: Update string; Error: Revert to previous version.
+    - `Delete` -> Success: Remove record; Error: Prompt confirmation.
+- **Backend/Data Layer**
+  - **Schema**: `{ id: UUID, text: String, is_completed: Boolean, created_at: Timestamp }`.
+  - **Storage**: LocalStorage (MVP) or REST API (Scale).
+  - **Validations**: No null strings; No duplicate IDs.
 
-### 1.3 Success Metrics (KPIs) & Business Value
-| Metric | Definition | Target |
-| :--- | :--- | :--- |
-| **Task Completion Rate** | % of created tasks marked as completed within 24h. | > 65% |
-| **Time to First Task** | Time from app load to successful task creation. | < 3 seconds |
-| **Retention (D7)** | % of users returning after 7 days. | > 40% |
-| **Error Rate** | % of transactions resulting in client/server errors. | < 0.1% |
-| **Performance Score** | Lighthouse performance score on mobile. | > 90 |
+## 5. Non-Functional Requirements
+- **Performance**: <200ms latency for task state updates; <1s initial page load.
+- **Security**: Client-side input sanitization to prevent XSS; LocalStorage encryption if sensitive data is stored.
+- **Compatibility**: Latest 2 versions of Chrome, Firefox, Safari; Responsive layout (Mobile/Desktop).
+- **Availability**: 99.9% uptime for hosted version.
 
----
-
-## 2. User Personas & Target Audience
-
-### 2.1 Primary Personas
-1.  **Sarah, the Busy Professional**
-    *   *Needs:* Quick capture on mobile, categorization by project, reliable sync.
-    *   *Pain Point:* Forgets small tasks while commuting; hates clunky UIs.
-2.  **Mike, the Focused Student**
-    *   *Needs:* Due date tracking, priority sorting, distraction-free interface.
-    *   *Pain Point:* Procrastination; needs visual urgency on assignments.
-
-### 2.2 User Journeys
-*   **Quick Capture:** User opens app → Types task → Hits Enter → Task appears immediately.
-*   **Review & Triage:** User opens Dashboard → Filters by "High Priority" → Marks tasks complete → Archives old tasks.
-*   **Search:** User types in global search → Results filter in real-time → User navigates to specific task.
-
----
-
-## 3. User Stories (Epics & Tasks)
-
-### Epic 1: Task Management Core
-**US 1.1: Create Task**
-> As a user, I want to create a new task with a title, due date, and priority, so that I can capture my responsibilities immediately.
-
-**Acceptance Criteria:**
-```gherkin
-Scenario: Create task with all fields
-  Given the user is on the Dashboard
-  When the user inputs a valid title, selects a due date, sets priority to "High", and clicks "Add"
-  Then the task is saved to the database
-  And the task appears in the active list with the correct attributes
-  And the input form is cleared for the next entry
-
-Scenario: Create task with minimal fields
-  Given the user is on the Dashboard
-  When the user inputs only a valid title and clicks "Add"
-  Then the task is saved with default priority "Medium" and no due date
+## 6. Out of Scope & Release Plan
+- **Exclusions**: User accounts/Auth, Due dates/Reminders, Category tags/Folders.
+- **Release Plan**:
+  1. **Alpha**: LocalStorage-only build for internal testing.
+  2. **Beta**: Deploy to staging with basic API persistence.
+  3. **GA**: Production release to public URL.

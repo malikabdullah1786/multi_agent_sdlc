@@ -9,6 +9,9 @@ import os
 import subprocess
 from pathlib import Path
 
+# Re-export generic terminal tool so nodes can import it from this package
+from agents.src.shared.tools import run_terminal_command  # noqa: F401
+
 _ROOT_DIR = Path(__file__).resolve().parents[5]
 _OUTPUT_DIR = _ROOT_DIR / "output"
 
@@ -29,12 +32,12 @@ def run_sast_scanner() -> str:
         fallback = "grep -ir 'password\\|secret\\|token' . | head -n 20"
         
     try:
-        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=60)
+        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         return f"SAST_SCAN_COMPLETE:\n{res.stdout[-2000:]}"
     except Exception:
         # Fallback to basic secrets grep if scanner not installed
         try:
-            res = subprocess.run(fallback, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=10)
+            res = subprocess.run(fallback, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
             return f"SAST_SCAN (Fallback Secrets Check):\n{res.stdout}"
         except Exception as e:
             return f"SAST_SCAN_FAILED: {e}"
@@ -54,7 +57,7 @@ def check_dependencies() -> str:
         return "DEPENDENCY_SCAN_SKIPPED: No package.json or requirements.txt found."
         
     try:
-        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, timeout=60)
+        res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if res.returncode == 0:
             return "DEPENDENCY_SCAN_PASSED: 0 vulnerabilities found."
         else:

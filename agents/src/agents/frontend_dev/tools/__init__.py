@@ -8,6 +8,8 @@ from pathlib import Path
 from langchain_core.tools import tool
 import subprocess
 import glob
+import re
+from agents.src.shared.tools import run_terminal_command
 
 _ROOT_DIR = Path(__file__).resolve().parents[5]
 _OUTPUT_DIR = _ROOT_DIR / "output"
@@ -166,7 +168,7 @@ def run_component_tests(test_file_path: str) -> str:
     try:
         result = subprocess.run(
             cmd, shell=True, cwd=str(output_dir),
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
         )
         if result.returncode == 0:
             return "TESTS_PASSED"
@@ -208,7 +210,7 @@ def visual_browser_check(route_url: str) -> str:
     try:
         result = subprocess.run(
             cmd, shell=True, cwd=str(output_dir),
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
         )
         if result.returncode == 0:
             return f"CONSOLE_CLEAN: {stack} build succeeded without errors."
@@ -221,3 +223,79 @@ def visual_browser_check(route_url: str) -> str:
         return "CONSOLE_CLEAN: Build timed out (likely compiling successfully but slowly)."
     except Exception as e:
         return f"CONSOLE_CLEAN: Could not run build check: {e}"
+
+
+@tool
+def read_file_range(file_path: str, start_line: int, end_line: int) -> str:
+    """
+    Reads a specific line range from a file (1-indexed) in the output directory
+    to prevent fetching massive files.
+    Args:
+        file_path: Path to the file (relative to output/).
+        start_line: The line number to start reading from (inclusive).
+        end_line: The line number to end reading (inclusive).
+    """
+    target = _OUTPUT_DIR / file_path
+    if not target.exists():
+        return f"Error: File {file_path} does not exist."
+        
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        total_lines = len(lines)
+        start = max(1, start_line)
+        end = min(total_lines, end_line)
+        
+        if end < start:
+            return f"Error: Invalid range {start}-{end}."
+            
+        if end - start > 500:
+            return "Error: Cannot read more than 500 lines at once."
+            
+        selected = lines[start-1:end]
+        return f"--- File: {file_path} (Lines {start}-{end} of {total_lines}) ---\n" + "".join(selected)
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+@tool
+def semantic_code_search(query: str) -> str:
+    """
+    Searches previously written code to find utility functions or router patterns.
+    Uses basic keyword matching across the output/ directory.
+    Args:
+        query: What to search for (e.g., 'auth', 'database connection').
+    """
+    output_dir = _OUTPUT_DIR
+    matches = []
+    
+    # Common code file extensions
+    extensions = ["*.py", "*.ts", "*.js", "*.java", "*.go", "*.rs", "*.tsx", "*.jsx"]
+    
+    for ext in extensions:
+        for f in glob.glob(str(output_dir / "**" / ext), recursive=True):
+            if "node_modules" in f or "/.git/" in f or "\\.git\\" in f or ".next" in f:
+                continue
+            
+            try:
+                content = Path(f).read_text(encoding="utf-8")
+                # Simple case-insensitive search
+                if query.lower() in content.lower():
+                    rel_path = Path(f).relative_to(output_dir)
+                    # Extract a snippet around the match
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if query.lower() in line.lower():
+                            start = max(0, i - 2)
+                            end = min(len(lines), i + 3)
+                            snippet = "\n".join(lines[start:end])
+                            matches.append(f"File: {rel_path}\nMatch:\n{snippet}\n")
+                            break # Just get first match per file to keep it short
+            except Exception:
+                pass
+                
+    if not matches:
+        return f"No code found matching '{query}' in the output directory."
+        
+    return f"Search Results for '{query}':\n\n" + "\n---\n".join(matches[:5])

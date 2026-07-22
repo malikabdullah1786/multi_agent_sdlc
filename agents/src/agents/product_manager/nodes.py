@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.prompts import PromptTemplate
-from langchain_groq import ChatGroq
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry
 from langgraph.types import interrupt
 
 from agents.src.agents.product_manager.state import ProductManagerState
@@ -27,10 +27,9 @@ from agents.src.agents.product_manager.tools import (
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = ChatGroq(
-    model="qwen/qwen3.6-27b",
-    temperature=0.7,
-    max_tokens=2500 
+_llm = get_llm(
+    temperature=0.4,
+    max_tokens=4000 
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -48,18 +47,25 @@ def research_node(state: ProductManagerState) -> dict:
     """
     Phase A — Step 1:
     Performs web search for competitor analysis and RAG search for past PRDs.
+    Optionally skips this if the request is for a generic new project.
     """
-    web_results: list[str] = []
-    rag_results: list[str] = []
+    from langchain_core.prompts import PromptTemplate
+    decision_prompt = PromptTemplate.from_template(
+        "Does this user request require researching an existing internal codebase or finding external web documentation? "
+        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
+    )
+    decision = llm_invoke_with_retry(_llm, decision_prompt.format(req=state.user_req)).content.strip().upper()
+    
+    import re
+    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
+    
+    if "YES" not in decision:
+        return {"web_search_results": ["Skipped web search for new generic project.", "Skipped internal RAG search for new generic project."]}
 
     # Web search (DuckDuckGo)
-    try:
-        from langchain_community.tools import DuckDuckGoSearchResults
-        ddg = DuckDuckGoSearchResults(max_results=4)
-        raw = ddg.invoke(f"product requirements {state.user_req}")
-        web_results = [str(raw)]
-    except Exception as e:
-        web_results = [f"Web search unavailable: {e}"]
+    from agents.src.shared.llm import safe_web_search
+    web_results = safe_web_search(f"product requirements {state.user_req}")
+    web_results = [web_results] if isinstance(web_results, str) else web_results
 
     # RAG search
     rag_raw = rag_search.invoke({"query": state.user_req, "k": 4})
@@ -90,7 +96,8 @@ def write_prd_node(state: ProductManagerState) -> dict:
         user_feedback=state.user_feedback or "No previous feedback.",
     )
 
-    response = _llm.invoke(formatted)
+    llm_with_tools = _llm.bind_tools([rag_search, create_jira_epic, create_jira_tickets, create_slack_channel])
+    response = llm_invoke_with_retry(llm_with_tools, formatted)
     content = response.content
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
@@ -127,9 +134,12 @@ def finalize_prd_node(state: ProductManagerState) -> dict:
     Also extracts a short project name for Slack channel naming.
     """
     # Derive a short slug for channel naming from the user requirement
-    slug = re.sub(r"[^a-z0-9\s]", "", state.user_req.lower())
-    slug = "-".join(slug.split()[:5])   # max 5 words
-    channel_name = f"proj-{slug}"[:80]  # Slack channel name max 80 chars
+    clean_req = re.sub(r"[^a-z0-9\s]", "", state.user_req.lower())
+    words = [w for w in clean_req.split() if w not in ("i", "want", "you", "to", "a", "the", "create", "build", "make", "for", "me")]
+    if not words:
+        words = clean_req.split()[:3]
+    slug = "-".join(words[:4]).strip("-")
+    channel_name = f"proj-{slug}"[:80].strip("-")
     
     # Save the approved PRD to the workspace root
     workspace_root = Path(__file__).resolve().parents[4]

@@ -14,6 +14,14 @@ class DatabaseEngineerState(BaseModel):
         default=None,
         description="The task currently being executed"
     )
+    github_repo_name: Optional[str] = Field(
+        default=None,
+        description="Global GitHub repository name"
+    )
+    active_pr_number: Optional[int] = Field(
+        default=None,
+        description="Active Pull Request number"
+    )
 
     # ── Execution internals ────────────────────────────────────────────────────
     db_connection_string: str = Field(

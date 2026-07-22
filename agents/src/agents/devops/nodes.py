@@ -17,18 +17,19 @@ from agents.src.agents.devops.tools import (
     validate_iac_config,
     run_deployment,
     health_check_ping,
-    push_github_actions
+    push_github_actions,
+    run_terminal_command,
 )
 
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-from langchain_groq import ChatGroq
+from agents.src.shared.llm import get_llm
+from pydantic import BaseModel, Field
+from typing import List
 import subprocess
 import os
 import requests
-from pydantic import BaseModel, Field
-from typing import List
 
 class GeneratedFile(BaseModel):
     path: str = Field(description="The relative path to save the file to, e.g. docker-compose.yml")
@@ -44,7 +45,48 @@ class CodeGenerationResponse(BaseModel):
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 _ROOT_DIR = Path(__file__).resolve().parents[4]
 
-_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, max_tokens=4000)
+_llm = get_llm(temperature=0.1, max_tokens=4000)
+
+def _get_codebase_summary() -> str:
+    output_dir = _ROOT_DIR / "output"
+    if not output_dir.exists():
+        return "No generated code found yet."
+        
+    code_blocks = []
+    omitted_files = []
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"}
+    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
+    
+    MAX_TOTAL_CHARS = 40000
+    current_total_chars = 0
+    
+    for path in sorted(output_dir.rglob("*")):
+        if path.is_file():
+            if any(part in ignored_dirs for part in path.parts):
+                continue
+            if path.suffix in allowed_extensions:
+                rel_path = path.relative_to(_ROOT_DIR)
+                if current_total_chars >= MAX_TOTAL_CHARS:
+                    omitted_files.append(str(rel_path))
+                    continue
+                    
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    if len(content) > 5000:
+                        content = content[:5000] + "\n... [TRUNCATED] ..."
+                    block = f"File: {rel_path}\n```\n{content}\n```"
+                    code_blocks.append(block)
+                    current_total_chars += len(block)
+                except Exception as e:
+                    code_blocks.append(f"File: {rel_path} (Error: {e})")
+                    
+    if not code_blocks and not omitted_files:
+        return "No files generated yet."
+        
+    res = "\n\n".join(code_blocks)
+    if omitted_files:
+        res += "\n\n### Omitted files due to context limits:\n" + "\n".join(f"- {f}" for f in omitted_files)
+    return res
 
 # ---------------------------------------------------------------------------
 # 1. Generate Deployment Plan Node
@@ -57,12 +99,17 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
     prompt_path = _PROMPTS_DIR / "devops.txt"
     prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
     
+    existing_code = _get_codebase_summary()
+    
     formatted = prompt.format(
         design=state.final_design_doc,
+        existing_code=existing_code,
         feedback=state.deployment_feedback or "None.",
         linter=state.iac_validation_notes or "None."
     )
     
+    # Use structured output only — bind_tools + with_structured_output conflict
+    # (both try to override the LLM output format, causing JSON parse failures)
     structured_llm = _llm.with_structured_output(CodeGenerationResponse)
     generated_dump = []
     
@@ -75,11 +122,18 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
         for cmd in response.terminal_commands:
             print(f"DevOps executing: {cmd}")
             try:
-                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, check=True)
-                generated_dump.append(f"Command '{cmd}' succeeded.\n{res.stdout}")
-            except subprocess.CalledProcessError as e:
-                print(f"Command '{cmd}' failed: {e.stderr}")
-                generated_dump.append(f"Command '{cmd}' failed.\n{e.stderr}")
+                # Do not check=True, run safely with check=False to handle errors gracefully
+                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+                if res.returncode != 0:
+                    generated_dump.append(f"Command '{cmd}' failed.\n{res.stderr or res.stdout}")
+                else:
+                    generated_dump.append(f"Command '{cmd}' succeeded.\n")
+            except subprocess.TimeoutExpired:
+                print(f"Command '{cmd}' timed out.")
+                generated_dump.append(f"Command '{cmd}' timed out.")
+            except Exception as e:
+                print(f"Command '{cmd}' failed: {e}")
+                generated_dump.append(f"Command '{cmd}' failed: {e}")
         
         # Files
         for f in response.files:
@@ -107,7 +161,17 @@ def push_to_github_node(state: DevOpsState) -> dict:
     Only runs if github_repo_name is set in state.
     """
     from agents.src.shared.github import push_to_github
-    res = push_to_github(state.github_repo_name, "DevOps Agent")
+    current_task = state.current_task or {}
+    context = {
+        "project_name":      getattr(state, "project_name", "") or "",
+        "task_title":        current_task.get("title", "Deploy infrastructure & CI/CD") if isinstance(current_task, dict) else "Deploy infrastructure & CI/CD",
+        "task_description":  current_task.get("description", "") if isinstance(current_task, dict) else "",
+        "completed_tasks":   list(getattr(state, "completed_task_titles", []) or []),
+        "files_changed":     [],  # DevOps writes docker-compose, Dockerfile, ci.yml
+        "scope":             "infra",
+        "linter_clean":      "VALIDATION_PASSED" in (getattr(state, "iac_validation_notes", "") or ""),
+    }
+    res = push_to_github(state.github_repo_name, "DevOps Agent", context=context)
     return {"active_pr_number": res.get("pr_number", 0)}
 
 # ---------------------------------------------------------------------------
@@ -153,10 +217,26 @@ def execute_deployment_node(state: DevOpsState) -> dict:
     """
     try:
         output_dir = _ROOT_DIR / "output"
-        if (output_dir / "docker-compose.yml").exists():
+        compose_file = output_dir / "docker-compose.yml"
+        if compose_file.exists():
             print("Running docker compose up -d --build...")
-            res = subprocess.run("docker compose up -d --build", shell=True, cwd=str(output_dir), capture_output=True, text=True, check=True)
+            res = subprocess.run("docker compose up -d --build", shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
             logs = f"SUCCESS: Containers started.\n{res.stdout}"
+            
+            # Attempt to parse port to provide a clickable link
+            try:
+                import yaml
+                data = yaml.safe_load(compose_file.read_text())
+                for service_name, service_data in data.get("services", {}).items():
+                    if "ports" in service_data and len(service_data["ports"]) > 0:
+                        port_mapping = str(service_data["ports"][0])
+                        # e.g., "3000:3000" or "8080:80"
+                        host_port = port_mapping.split(":")[0].strip('"').strip("'")
+                        print(f"\n🚀 App is running! Click here to view: http://localhost:{host_port}\n")
+                        break
+            except Exception:
+                pass
+                
         else:
             logs = "SUCCESS: Deployment mocked (no docker-compose.yml found)."
     except Exception as e:

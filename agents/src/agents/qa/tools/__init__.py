@@ -9,8 +9,9 @@ import os
 import requests
 import subprocess
 from pathlib import Path
+from agents.src.shared.tools import run_terminal_command
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
+_ROOT_DIR = Path(__file__).resolve().parents[4]
 _OUTPUT_DIR = _ROOT_DIR / "output"
 
 @tool
@@ -56,7 +57,7 @@ def run_test_suite() -> str:
     try:
         res = subprocess.run(
             cmd, shell=True, cwd=str(output_dir),
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
         )
         if res.returncode == 0:
             return f"TEST_EXECUTION_COMPLETE: Tests passed.\n{res.stdout[-1000:]}"

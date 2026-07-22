@@ -1,0 +1,92 @@
+[
+    {
+        "title": "Setup DB Schema",
+        "description": "Create tasks table with UUID and indexes.",
+        "assignee_role": "database_engineer",
+        "priority": 1,
+        "dependencies": []
+    },
+    {
+        "title": "Build Task API",
+        "description": "Implement CRUD endpoints using FastAPI and Pydantic.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup DB Schema"
+        ]
+    },
+    {
+        "title": "Implement Workspace Logic",
+        "description": "Add X-Workspace-ID header validation and filtering.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup DB Schema"
+        ]
+    },
+    {
+        "title": "Create Task UI",
+        "description": "Build TaskInput and TaskList React components.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build Task API"
+        ]
+    },
+    {
+        "title": "Integrate API Hooks",
+        "description": "Implement useTasks hook with optimistic UI updates.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build Task API"
+        ]
+    },
+    {
+        "title": "Test Task Flow",
+        "description": "Verify create, toggle, and delete functionality.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Create Task UI",
+            "Integrate API Hooks"
+        ]
+    },
+    {
+        "title": "Verify Persistence",
+        "description": "Test data retention across page refreshes.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Integrate API Hooks"
+        ]
+    },
+    {
+        "title": "Code Review",
+        "description": "Review backend logic and frontend component structure.",
+        "assignee_role": "reviewer",
+        "priority": 5,
+        "dependencies": [
+            "Test Task Flow",
+            "Verify Persistence"
+        ]
+    },
+    {
+        "title": "Security Audit",
+        "description": "Check for XSS and SQL injection vulnerabilities.",
+        "assignee_role": "security",
+        "priority": 6,
+        "dependencies": [
+            "Code Review"
+        ]
+    },
+    {
+        "title": "Deploy Pipeline",
+        "description": "Setup CI/CD for FastAPI and React app.",
+        "assignee_role": "devops",
+        "priority": 7,
+        "dependencies": [
+            "Security Audit"
+        ]
+    }
+]

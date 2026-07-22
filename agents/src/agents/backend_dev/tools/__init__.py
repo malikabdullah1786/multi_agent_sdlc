@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 import subprocess
 import glob
 import re
+from agents.src.shared.tools import run_terminal_command
 
 _ROOT_DIR = Path(__file__).resolve().parents[5]
 _OUTPUT_DIR = _ROOT_DIR / "output"
@@ -110,7 +111,7 @@ def run_unit_tests(test_file_path: str) -> str:
     try:
         result = subprocess.run(
             cmd, shell=True, cwd=str(output_dir),
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
         )
         if result.returncode == 0:
             return "TESTS_PASSED"
@@ -190,3 +191,37 @@ def db_schema_inspector(table_name: str) -> str:
         return f"Schema for {table_name}:\n```sql\n{match.group(0)}\n```"
         
     return f"Table '{table_name}' not found in the database schema."
+
+
+@tool
+def read_file_range(file_path: str, start_line: int, end_line: int) -> str:
+    """
+    Reads a specific line range from a file (1-indexed) in the output directory
+    to prevent fetching massive files.
+    Args:
+        file_path: Path to the file (relative to output/).
+        start_line: The line number to start reading from (inclusive).
+        end_line: The line number to end reading (inclusive).
+    """
+    target = _OUTPUT_DIR / file_path
+    if not target.exists():
+        return f"Error: File {file_path} does not exist."
+        
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        total_lines = len(lines)
+        start = max(1, start_line)
+        end = min(total_lines, end_line)
+        
+        if end < start:
+            return f"Error: Invalid range {start}-{end}."
+            
+        if end - start > 500:
+            return "Error: Cannot read more than 500 lines at once."
+            
+        selected = lines[start-1:end]
+        return f"--- File: {file_path} (Lines {start}-{end} of {total_lines}) ---\n" + "".join(selected)
+    except Exception as e:
+        return f"Error reading file: {e}"
