@@ -8,7 +8,6 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
 from langgraph.types import interrupt
 
 from agents.src.agents.devops.state import DevOpsState

@@ -201,6 +201,12 @@ def write_code_node(state: BackendDevState) -> dict:
                 
             # Process tool calls
             for tool_call in response.tool_calls:
+                try:
+                    from backend.telemetry import broadcast_tool_call
+                    broadcast_tool_call(tool_call["name"], str(tool_call.get("args", {})))
+                except Exception:
+                    pass
+
                 if tool_call["name"] == "read_file_range":
                     # Execute tool physically
                     print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
@@ -259,6 +265,11 @@ def write_code_node(state: BackendDevState) -> dict:
             print(f"Backend Dev executing: {cmd}")
             try:
                 res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=200)
+                try:
+                    from backend.telemetry import broadcast_tool_call
+                    broadcast_tool_call("execute_command", cmd, event_type="TERMINAL_COMMAND", payload_extra={"command": cmd, "stdout": res.stdout or "", "stderr": res.stderr or "", "exit_code": res.returncode})
+                except Exception:
+                    pass
                 if(res.returncode!=0):
                     generated_code_dump.append(f"Command {cmd} failed with output {res.stdout}\n")
                 else:
@@ -282,6 +293,12 @@ def write_code_node(state: BackendDevState) -> dict:
             file_path.write_text(file_content, encoding="utf-8")
             print(f"Backend Dev wrote: {file_path.relative_to(_ROOT_DIR)}")
             generated_code_dump.append(f"File: {file_path.relative_to(_ROOT_DIR)} written.")
+            try:
+                from backend.telemetry import broadcast_tool_call
+                rel_p = str(file_path.relative_to(output_dir))
+                broadcast_tool_call("create_file", rel_p, event_type="FILE_CHANGE", payload_extra={"path": rel_p, "action": "CREATED", "diff": f"+ Created file {rel_p}"})
+            except Exception:
+                pass
             
     except Exception as e:
         print(f"Raw JSON parsing failed: {e}")

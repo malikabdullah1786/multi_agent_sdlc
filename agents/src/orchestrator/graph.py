@@ -32,7 +32,10 @@ def _run_subgraph_with_interrupts(subgraph, initial_input, config):
     sub_state = subgraph.get_state(config)
     if not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
         for event in subgraph.stream(initial_input, config=config):
-            pass
+            for sub_node, _ in event.items():
+                if sub_node != "__interrupt__":
+                    from backend.telemetry import broadcast_subgraph_node
+                    broadcast_subgraph_node(sub_node, thread_id)
             
     local_count = 0
     # Process any interrupts in a loop
@@ -68,6 +71,8 @@ def _run_subgraph_with_interrupts(subgraph, initial_input, config):
         for event in subgraph.stream(Command(resume=user_response), config=config):
             for sub_node, _ in event.items():
                 if sub_node != "__interrupt__":
+                    from backend.telemetry import broadcast_subgraph_node
+                    broadcast_subgraph_node(sub_node, thread_id)
                     import time
                     print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
                     
@@ -78,12 +83,13 @@ def _run_subgraph_with_interrupts(subgraph, initial_input, config):
 # ===========================================================================
 
 def planning_stage(state: WorkflowSate) -> dict:
-    _run_subgraph_with_interrupts(
+    out = _run_subgraph_with_interrupts(
         planning_subgraph,
         {"user_req": state.user_req},
         {"configurable": {"thread_id": f"{state.workflowId}-planning"}}
     )
-    return {}
+    updated_req = (out.get("user_req") if isinstance(out, dict) else None) or state.user_req
+    return {"user_req": updated_req}
 
 def pm_phase_a_stage(state: WorkflowSate) -> dict:
     out = _run_subgraph_with_interrupts(
@@ -339,9 +345,7 @@ parent_workflow.add_edge("qa_stage", "dispatcher_stage")
 parent_workflow.add_edge("reviewer_stage", "dispatcher_stage")
 parent_workflow.add_edge("security_stage", "dispatcher_stage")
 
-from langgraph.checkpoint.sqlite import SqliteSaver
-import sqlite3
+from langgraph.checkpoint.memory import MemorySaver
 
-conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-checkpointer = SqliteSaver(conn)
+checkpointer = MemorySaver()
 orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { ApprovalRequest } from '@/types/chat';
 import { useChatStore } from '@/store/chatStore';
+import { respondToApproval } from '@/lib/api';
 import { CheckCircle2, XCircle, MessageSquare, FileText } from 'lucide-react';
 
 interface ApprovalCardProps {
@@ -16,16 +17,26 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
 
   const isResolved = approval.status !== 'pending';
 
-  const handleApprove = () => {
-    submitApproval(approval.id, true);
+  const handleApprove = async () => {
+    try {
+      await respondToApproval(approval.id, '');
+      submitApproval(approval.id, true);
+    } catch (err) {
+      console.error('Failed to send approval:', err);
+    }
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!showFeedback) {
       setShowFeedback(true);
       return;
     }
-    submitApproval(approval.id, false, feedback);
+    try {
+      await respondToApproval(approval.id, feedback);
+      submitApproval(approval.id, false, feedback);
+    } catch (err) {
+      console.error('Failed to send feedback:', err);
+    }
   };
 
   const typeIcons: Record<string, React.ReactNode> = {
@@ -33,6 +44,11 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
     design: <FileText size={16} />,
     general: <MessageSquare size={16} />,
   };
+
+  const isQuestionType = approval.type === 'clarifying_questions' || approval.type === 'question';
+  const displayTitle = isQuestionType
+    ? 'Clarification Requested'
+    : (approval.title || 'Approval Required');
 
   return (
     <div className={`approval-card mt-3 animate-slide-in-up ${isResolved ? 'opacity-70' : ''}`}>
@@ -42,20 +58,20 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
           {typeIcons[approval.type] || <MessageSquare size={16} />}
         </span>
         <span className="text-sm font-semibold text-[var(--text-primary)]">
-          {approval.title}
+          {displayTitle}
         </span>
         {isResolved && (
           <span className={`ml-auto text-xs font-medium ${
             approval.status === 'approved' ? 'text-[var(--state-completed)]' : 'text-[var(--state-error)]'
           }`}>
-            {approval.status === 'approved' ? '✅ Approved' : '❌ Changes Requested'}
+            {approval.status === 'approved' ? '✅ Answered' : '❌ Changes Requested'}
           </span>
         )}
       </div>
 
       {/* Body */}
       <div className="p-4">
-        {approval.message && (
+        {approval.message && !isQuestionType && (
           <p className="text-sm text-[var(--text-secondary)] mb-3">
             {approval.message}
           </p>
@@ -64,7 +80,7 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
         {approval.questions && approval.questions.length > 0 && (
           <div className="mb-3">
             <p className="text-xs text-[var(--text-muted)] font-medium mb-1 uppercase tracking-wider">
-              Questions
+              {isQuestionType ? 'Agent Message / Questions' : 'Questions'}
             </p>
             <ul className="space-y-1">
               {approval.questions.map((q, i) => (
@@ -93,22 +109,31 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
 
         {/* Action buttons */}
         {!isResolved && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleApprove}
-              className="flex items-center gap-1.5 px-4 py-2 bg-[var(--state-completed)] hover:bg-[var(--state-completed)]/90 text-white text-sm font-medium rounded-lg transition-all hover:shadow-lg hover:shadow-[var(--state-completed)]/20"
-            >
-              <CheckCircle2 size={14} />
-              Approve
-            </button>
-            <button
-              onClick={handleReject}
-              className="flex items-center gap-1.5 px-4 py-2 bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-[var(--state-approval)] text-sm font-medium rounded-lg border border-[var(--state-approval)]/30 transition-all"
-            >
-              <XCircle size={14} />
-              {showFeedback ? 'Submit Feedback' : 'Request Changes'}
-            </button>
-          </div>
+          isQuestionType ? (
+            <div className="p-2 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-subtle)]">
+              <p className="text-xs text-[var(--text-muted)] italic flex items-center gap-1.5">
+                <span>💬</span>
+                <span>Type your response or project requirements in the chat box below to reply.</span>
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleApprove}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[var(--state-completed)] hover:bg-[var(--state-completed)]/90 text-white text-sm font-medium rounded-lg transition-all hover:shadow-lg hover:shadow-[var(--state-completed)]/20"
+              >
+                <CheckCircle2 size={14} />
+                Approve
+              </button>
+              <button
+                onClick={handleReject}
+                className="flex items-center gap-1.5 px-4 py-2 bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-[var(--state-approval)] text-sm font-medium rounded-lg border border-[var(--state-approval)]/30 transition-all"
+              >
+                <XCircle size={14} />
+                {showFeedback ? 'Submit Feedback' : 'Request Changes'}
+              </button>
+            </div>
+          )
         )}
 
         {/* Show submitted feedback */}

@@ -199,6 +199,12 @@ def write_ui_code_node(state: FrontendDevState) -> dict:
                 
             # Process tool calls
             for tool_call in response.tool_calls:
+                try:
+                    from backend.telemetry import broadcast_tool_call
+                    broadcast_tool_call(tool_call["name"], str(tool_call.get("args", {})))
+                except Exception:
+                    pass
+
                 if tool_call["name"] == "read_file_range":
                     # Execute tool physically
                     print(f"Frontend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
@@ -254,7 +260,12 @@ def write_ui_code_node(state: FrontendDevState) -> dict:
                 
             print(f"Frontend Dev executing: {cmd}")
             try:
-                subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, timeout=120, check=False)
+                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
+                try:
+                    from backend.telemetry import broadcast_tool_call
+                    broadcast_tool_call("execute_command", cmd, event_type="TERMINAL_COMMAND", payload_extra={"command": cmd, "stdout": res.stdout or "", "stderr": res.stderr or "", "exit_code": res.returncode})
+                except Exception:
+                    pass
             except subprocess.TimeoutExpired:
                 print(f"Frontend Dev skipped (Timeout): {cmd}")
                 generated_code_dump.append({cmd: "Timed out"})
@@ -274,6 +285,12 @@ def write_ui_code_node(state: FrontendDevState) -> dict:
             file_path.write_text(file_content, encoding="utf-8")
             generated_code_dump.append({f.get("path", ""): "Generated"})
             print(f"Frontend Dev wrote: {file_path.relative_to(_ROOT_DIR)}")
+            try:
+                from backend.telemetry import broadcast_tool_call
+                rel_p = str(file_path.relative_to(output_dir))
+                broadcast_tool_call("create_file", rel_p, event_type="FILE_CHANGE", payload_extra={"path": rel_p, "action": "CREATED", "diff": f"+ Created file {rel_p}"})
+            except Exception:
+                pass
             
     except Exception as e:
         print(f"Raw JSON parsing failed: {e}")

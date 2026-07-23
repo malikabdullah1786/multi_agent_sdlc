@@ -123,24 +123,33 @@ def enforce_security_gate_node(state: SecurityState) -> dict:
     
     if not state.security_approved:
         import time
-        vulns = state.get("internal_vulnerabilities", [])
+        vulns = getattr(state, 'internal_vulnerabilities', []) or []
         
         if not vulns:
             # Fallback if the LLM flagged but didn't extract specific items
             vulns = [{"title": "General Security Block", "severity": "HIGH", "mitigation": "Review SAST logs"}]
             
         for v in vulns:
+            if isinstance(v, dict):
+                v_title = v.get("title", "Vuln")
+                v_sev = v.get("severity", "HIGH")
+                v_mit = v.get("mitigation", "Fix code")
+            else:
+                v_title = str(v)
+                v_sev = "HIGH"
+                v_mit = "Fix code"
+
             file_security_ticket.invoke({
-                "cve_title": v.get("title", "Vuln"),
-                "severity": v.get("severity", "HIGH"),
-                "mitigation": v.get("mitigation", "Fix code")
+                "cve_title": v_title,
+                "severity": v_sev,
+                "mitigation": v_mit
             })
             
             # Spawn a new task for the orchestrator
             new_tasks.append({
                 "id": f"task-sec-{int(time.time())}",
-                "title": f"Fix Security Vulnerability: {v.get('title')}",
-                "description": f"Security scan found a {v.get('severity')} vulnerability.\n\nMitigation:\n{v.get('mitigation')}",
+                "title": f"Fix Security Vulnerability: {v_title}",
+                "description": f"Security scan found a {v_sev} vulnerability.\n\nMitigation:\n{v_mit}",
                 "assignee_role": "backend", # Usually backend handles sec fixes
                 "dependencies": [],
                 "priority": 1 # Security fixes are top priority

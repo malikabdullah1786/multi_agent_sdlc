@@ -3,13 +3,15 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { Send } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
+import { createProject, respondToApproval } from '@/lib/api';
+import { connectRealWorkflow } from '@/lib/realWorkflow';
 
 export function ChatInput() {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { addMessage, pendingApproval } = useChatStore();
+  const { addMessage, pendingApproval, submitApproval } = useChatStore();
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
 
@@ -26,7 +28,25 @@ export function ChatInput() {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [input, addMessage]);
+
+    if (pendingApproval) {
+      try {
+        await respondToApproval(pendingApproval.id, trimmed);
+        submitApproval(pendingApproval.id, true, trimmed);
+      } catch (err) {
+        console.error('Failed to send approval response:', err);
+      }
+    } else {
+      try {
+        const proj = await createProject(`SDLC Project ${new Date().toLocaleTimeString()}`, trimmed);
+        if (proj && proj.id) {
+          connectRealWorkflow(String(proj.id));
+        }
+      } catch (err) {
+        console.error('Failed to trigger orchestrator project:', err);
+      }
+    }
+  }, [input, addMessage, pendingApproval]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

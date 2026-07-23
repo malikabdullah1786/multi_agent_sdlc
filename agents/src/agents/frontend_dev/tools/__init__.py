@@ -122,6 +122,7 @@ def frontend_linter(file_path: str) -> str:
         proc = subprocess.Popen(
             cmd, shell=True, cwd=str(output_dir),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if hasattr(subprocess, 'CREATE_NEW_PROCESS_GROUP') else 0
         )
         try:
@@ -129,7 +130,7 @@ def frontend_linter(file_path: str) -> str:
             if proc.returncode == 0:
                 return "LINT_PASSED"
             else:
-                errors = stdout.decode(errors="replace") or stderr.decode(errors="replace")
+                errors = (stdout or stderr or "")
                 return f"LINT_FAILED:\n{errors[:1000]}"
         except subprocess.TimeoutExpired:
             proc.kill()

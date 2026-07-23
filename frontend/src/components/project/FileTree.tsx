@@ -17,19 +17,20 @@ import {
 
 // ── File icon based on language/extension ────────────────────────────────
 function getFileIcon(name: string, language?: string) {
-  if (language === 'typescript' || name.endsWith('.tsx') || name.endsWith('.ts'))
+  const safeName = name || '';
+  if (language === 'typescript' || safeName.endsWith('.tsx') || safeName.endsWith('.ts'))
     return <FileCode2 size={14} className="text-blue-400" />;
-  if (language === 'python' || name.endsWith('.py'))
+  if (language === 'python' || safeName.endsWith('.py'))
     return <FileCode2 size={14} className="text-yellow-400" />;
-  if (language === 'json' || name.endsWith('.json'))
+  if (language === 'json' || safeName.endsWith('.json'))
     return <FileJson size={14} className="text-amber-400" />;
-  if (language === 'css' || name.endsWith('.css'))
+  if (language === 'css' || safeName.endsWith('.css'))
     return <FileType size={14} className="text-purple-400" />;
-  if (language === 'markdown' || name.endsWith('.md'))
+  if (language === 'markdown' || safeName.endsWith('.md'))
     return <FileText size={14} className="text-gray-400" />;
-  if (name.endsWith('.yml') || name.endsWith('.yaml'))
+  if (safeName.endsWith('.yml') || safeName.endsWith('.yaml'))
     return <FileText size={14} className="text-pink-400" />;
-  if (name === 'Dockerfile')
+  if (safeName === 'Dockerfile')
     return <FileCode2 size={14} className="text-cyan-400" />;
   return <FileText size={14} className="text-[var(--text-dim)]" />;
 }

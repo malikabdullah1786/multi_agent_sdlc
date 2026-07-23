@@ -35,6 +35,22 @@ def run_terminal_command(command: str) -> str:
         stdout = res.stdout.strip()
         stderr = res.stderr.strip()
         
+        try:
+            from backend.telemetry import broadcast_tool_call
+            broadcast_tool_call(
+                "run_terminal_command",
+                command,
+                event_type="TERMINAL_COMMAND",
+                payload_extra={
+                    "command": command,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": res.returncode
+                }
+            )
+        except Exception:
+            pass
+
         if res.returncode == 0:
             output = stdout or stderr or "Command completed with exit code 0."
             return f"COMMAND_SUCCESS ({command}):\n{output[:2000]}"

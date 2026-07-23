@@ -5,14 +5,41 @@ import { useWorkflowStore } from '@/store/workflowStore';
 import { useChatStore } from '@/store/chatStore';
 import { AGENT_DISPLAY } from '@/types/agent';
 import { AgentStateIndicator } from '@/components/chat/AgentStateIndicator';
-import { PIPELINE_PHASES } from '@/lib/graphData';
-import { Wifi, WifiOff, Activity } from 'lucide-react';
+import { PIPELINE_PHASES, PARENT_GRAPH_NODES, PARENT_GRAPH_EDGES } from '@/lib/graphData';
+import { Workflow } from '@/types/workflow';
+import { Wifi, WifiOff, Activity, Plus } from 'lucide-react';
 
 export function Header() {
-  const { currentWorkflow } = useWorkflowStore();
+  const { currentWorkflow, setCurrentWorkflow } = useWorkflowStore();
   const { activeAgent, activeAgentState, isConnected } = useChatStore();
 
   const agentDisplay = activeAgent ? AGENT_DISPLAY[activeAgent] : null;
+
+  const handleNewProject = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('activeProjectId');
+    }
+    useChatStore.setState({
+      messages: [],
+      pendingApproval: null,
+      activeAgent: null,
+      activeAgentState: 'idle',
+      activeAgentNode: null,
+    });
+
+    const resetWorkflow: Workflow = {
+      id: `wf-${Date.now()}`,
+      projectId: 'new-project',
+      status: 'pending',
+      nodes: PARENT_GRAPH_NODES.map((n) => ({ ...n, status: 'pending' as const })),
+      edges: [...PARENT_GRAPH_EDGES],
+      createdAt: new Date().toISOString(),
+      currentPhase: 'Requirements & Planning',
+      currentPhaseIndex: 0,
+      totalPhases: 6,
+    };
+    setCurrentWorkflow(resetWorkflow);
+  };
 
   // Calculate pipeline progress
   const completedNodes = currentWorkflow?.nodes.filter((n) => n.status === 'completed').length || 0;
@@ -21,8 +48,8 @@ export function Header() {
 
   return (
     <header className="h-[var(--header-height)] border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 flex items-center justify-between flex-shrink-0">
-      {/* Left: Project info */}
-      <div className="flex items-center gap-3">
+      {/* Left: Project info + Start New Project button */}
+      <div className="flex items-center gap-4">
         <div>
           <h1 className="text-sm font-semibold text-[var(--text-primary)] leading-none">
             SDLC Orchestrator
@@ -31,6 +58,15 @@ export function Header() {
             {currentWorkflow?.currentPhase || 'Initializing...'}
           </p>
         </div>
+
+        <button
+          onClick={handleNewProject}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white text-xs font-medium rounded-lg shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer ml-2"
+          title="Start a new SDLC Project Workflow"
+        >
+          <Plus size={14} />
+          <span>New Project</span>
+        </button>
       </div>
 
       {/* Center: Pipeline progress */}

@@ -1,92 +1,168 @@
 [
     {
-        "title": "Setup DB Schema",
-        "description": "Create tasks table with UUID and indexes.",
+        "title": "Setup Storage Wrapper",
+        "description": "Implement localStorage wrapper for high scores.",
         "assignee_role": "database_engineer",
         "priority": 1,
         "dependencies": []
     },
     {
-        "title": "Build Task API",
-        "description": "Implement CRUD endpoints using FastAPI and Pydantic.",
+        "title": "Build Physics Engine",
+        "description": "Implement gravity and velocity logic.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Setup DB Schema"
+            "Setup Storage Wrapper"
         ]
     },
     {
-        "title": "Implement Workspace Logic",
-        "description": "Add X-Workspace-ID header validation and filtering.",
+        "title": "Implement Collision Logic",
+        "description": "Create AABB collision detection for pipes.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Setup DB Schema"
+            "Setup Storage Wrapper"
         ]
     },
     {
-        "title": "Create Task UI",
-        "description": "Build TaskInput and TaskList React components.",
+        "title": "Create Game State",
+        "description": "Implement START, PLAYING, GAME_OVER state machine.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup Storage Wrapper"
+        ]
+    },
+    {
+        "title": "Develop Bird Logic",
+        "description": "Implement bird movement and update loop.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Build Physics Engine"
+        ]
+    },
+    {
+        "title": "Develop Pipe Logic",
+        "description": "Implement randomized pipe generation and movement.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Build Physics Engine"
+        ]
+    },
+    {
+        "title": "Build Canvas Renderer",
+        "description": "Implement drawing primitives for game entities.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Build Task API"
+            "Develop Bird Logic",
+            "Develop Pipe Logic"
         ]
     },
     {
-        "title": "Integrate API Hooks",
-        "description": "Implement useTasks hook with optimistic UI updates.",
+        "title": "Create Game UI",
+        "description": "Build score display and start/over screens.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Build Task API"
+            "Create Game State"
         ]
     },
     {
-        "title": "Test Task Flow",
-        "description": "Verify create, toggle, and delete functionality.",
+        "title": "Integrate Input Handlers",
+        "description": "Connect keyboard and mouse events to physics.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build Canvas Renderer"
+        ]
+    },
+    {
+        "title": "Test Physics Loop",
+        "description": "Verify gravity and jump consistency.",
         "assignee_role": "qa",
         "priority": 4,
         "dependencies": [
-            "Create Task UI",
-            "Integrate API Hooks"
+            "Integrate Input Handlers",
+            "Develop Bird Logic"
         ]
     },
     {
-        "title": "Verify Persistence",
-        "description": "Test data retention across page refreshes.",
+        "title": "Test Collision System",
+        "description": "Verify game over triggers on pipe hit.",
         "assignee_role": "qa",
         "priority": 4,
         "dependencies": [
-            "Integrate API Hooks"
+            "Integrate Input Handlers",
+            "Implement Collision Logic"
         ]
     },
     {
-        "title": "Code Review",
-        "description": "Review backend logic and frontend component structure.",
+        "title": "Test Score Persistence",
+        "description": "Verify high score saves to localStorage.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Create Game UI",
+            "Setup Storage Wrapper"
+        ]
+    },
+    {
+        "title": "Code Review Core",
+        "description": "Review physics and collision implementation.",
         "assignee_role": "reviewer",
         "priority": 5,
         "dependencies": [
-            "Test Task Flow",
-            "Verify Persistence"
+            "Test Physics Loop",
+            "Test Collision System"
         ]
     },
     {
-        "title": "Security Audit",
-        "description": "Check for XSS and SQL injection vulnerabilities.",
+        "title": "Review UI/UX",
+        "description": "Review canvas rendering and UI responsiveness.",
+        "assignee_role": "reviewer",
+        "priority": 5,
+        "dependencies": [
+            "Test Score Persistence"
+        ]
+    },
+    {
+        "title": "Audit Storage Access",
+        "description": "Verify try-catch blocks for localStorage security.",
         "assignee_role": "security",
         "priority": 6,
         "dependencies": [
-            "Code Review"
+            "Code Review Core"
         ]
     },
     {
-        "title": "Deploy Pipeline",
-        "description": "Setup CI/CD for FastAPI and React app.",
+        "title": "Audit Input Sanitization",
+        "description": "Ensure event preventDefault is correctly implemented.",
+        "assignee_role": "security",
+        "priority": 6,
+        "dependencies": [
+            "Review UI/UX"
+        ]
+    },
+    {
+        "title": "Configure Vite Build",
+        "description": "Setup minification and bundling for production.",
         "assignee_role": "devops",
         "priority": 7,
         "dependencies": [
-            "Security Audit"
+            "Audit Storage Access",
+            "Audit Input Sanitization"
+        ]
+    },
+    {
+        "title": "Deploy to Vercel",
+        "description": "Deploy final build to static hosting.",
+        "assignee_role": "devops",
+        "priority": 7,
+        "dependencies": [
+            "Configure Vite Build"
         ]
     }
 ]

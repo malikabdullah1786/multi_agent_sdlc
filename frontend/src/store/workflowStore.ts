@@ -37,9 +37,11 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           ...state.currentWorkflow,
           activeNodeId: nodeId,
           status: 'running',
-          nodes: state.currentWorkflow.nodes.map((n) =>
-            n.id === nodeId ? { ...n, status: 'running' as const } : n
-          ),
+          nodes: state.currentWorkflow.nodes.map((n) => {
+            if (n.id === nodeId) return { ...n, status: 'running' as const };
+            if (n.status === 'running') return { ...n, status: 'completed' as const };
+            return n;
+          }),
         },
       };
     }),
