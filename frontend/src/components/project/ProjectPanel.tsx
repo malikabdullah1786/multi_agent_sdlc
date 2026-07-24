@@ -1,7 +1,6 @@
-'use client';
-
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useProjectViewStore } from '@/store/projectViewStore';
+import { getFileContent } from '@/lib/api';
 import { FileTree } from './FileTree';
 import { CodeViewer } from './CodeViewer';
 import { DiffViewer } from './DiffViewer';
@@ -23,7 +22,21 @@ export function ProjectPanel() {
     toggleDiffView,
     selectDiff,
     selectDocument,
+    selectFile,
   } = useProjectViewStore();
+
+  // Automatically fetch content if selected file content is not loaded yet
+  useEffect(() => {
+    if (selectedFile && selectedFile.content === undefined && selectedFile.type !== 'directory') {
+      getFileContent(selectedFile.path)
+        .then((data) => {
+          if (data && data.content !== undefined) {
+            selectFile({ ...selectedFile, content: data.content });
+          }
+        })
+        .catch((err) => console.warn('Could not fetch file content:', err));
+    }
+  }, [selectedFile?.path]);
 
   // If a document is selected, show document viewer
   if (selectedDocument) {
@@ -158,9 +171,9 @@ export function ProjectPanel() {
         <div className="flex-1 overflow-hidden">
           {showDiff && selectedDiff ? (
             <DiffViewer diff={selectedDiff} />
-          ) : selectedFile?.content ? (
+          ) : selectedFile ? (
             <CodeViewer
-              code={selectedFile.content}
+              code={selectedFile.content !== undefined ? selectedFile.content : '// Loading file content...'}
               language={selectedFile.language || 'text'}
               filename={selectedFile.path}
             />

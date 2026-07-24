@@ -18,7 +18,7 @@ export function AgentStateIndicator({ state, nodeName, compact = false }: AgentS
     thinking: 'bg-[var(--state-thinking-bg)] border-[var(--state-thinking)]/20',
     drafting: 'bg-[var(--state-drafting-bg)] border-[var(--state-drafting)]/20',
     reviewing: 'bg-[var(--state-reviewing-bg)] border-[var(--state-reviewing)]/20',
-    waiting_approval: 'bg-[var(--state-approval-bg)] border-[var(--state-approval)]/20',
+    awaiting_approval: 'bg-[var(--state-approval-bg)] border-[var(--state-approval)]/20',
     executing: 'bg-[var(--state-executing-bg)] border-[var(--state-executing)]/20',
     completed: 'bg-[var(--state-completed-bg)] border-[var(--state-completed)]/20',
     error: 'bg-[var(--state-error-bg)] border-[var(--state-error)]/20',

@@ -297,16 +297,20 @@ blob-report/
 
     git_commands = [
         "git init",
-        'git config user.email "ai-orchestrator@sdlc.local"',
-        'git config user.name "AI SDLC Orchestrator"',
-        # Start directly on the feature branch and make the real commit there
-        f"git checkout -B {branch_name}",
+        'git config user.email "[EMAIL_ADDRESS]"',
+        'git config user.name "Hamza Abbas"',
+        # Switch to main and make an empty base commit just in case it's a new repo
+        "git checkout -b main",
+        f'git commit --allow-empty -m "{initial_msg}"',
+        # Try to fetch the remote main branch. If it fails, we fall back to pushing our empty commit to initialize the remote repo.
+        f"git fetch {auth_url} main || true",
+        f"git reset FETCH_HEAD || git push -u {auth_url} main",
+        # Now checkout the feature branch. The working directory still has all our generated code untouched!
+        f"git checkout -b {branch_name}",
         "git add .",
         f'git commit -m "{commit_message}" --allow-empty',
-        # Push feature branch (this is what the PR will be created from)
+        # Push feature branch. This commit will only contain the diff against the remote main branch!
         f"git push -u -f {auth_url} {branch_name}",
-        # Also push to main so the repo has a base branch for the PR
-        f"git push -f {auth_url} {branch_name}:main",
     ]
 
     for cmd in git_commands:

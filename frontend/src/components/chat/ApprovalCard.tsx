@@ -5,6 +5,8 @@ import { ApprovalRequest } from '@/types/chat';
 import { useChatStore } from '@/store/chatStore';
 import { respondToApproval } from '@/lib/api';
 import { CheckCircle2, XCircle, MessageSquare, FileText } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ApprovalCardProps {
   approval: ApprovalRequest;
@@ -72,9 +74,11 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
       {/* Body */}
       <div className="p-4">
         {approval.message && !isQuestionType && (
-          <p className="text-sm text-[var(--text-secondary)] mb-3">
-            {approval.message}
-          </p>
+          <div className="text-sm text-[var(--text-secondary)] mb-3 prose prose-sm prose-invert max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {approval.message}
+            </ReactMarkdown>
+          </div>
         )}
 
         {approval.questions && approval.questions.length > 0 && (
@@ -82,14 +86,13 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
             <p className="text-xs text-[var(--text-muted)] font-medium mb-1 uppercase tracking-wider">
               {isQuestionType ? 'Agent Message / Questions' : 'Questions'}
             </p>
-            <ul className="space-y-1">
+            <div className="space-y-3 mt-2">
               {approval.questions.map((q, i) => (
-                <li key={i} className="text-sm text-[var(--text-secondary)] flex items-start gap-2">
-                  <span className="text-[var(--state-approval)] mt-0.5">•</span>
-                  {q}
-                </li>
+                <div key={i} className="text-sm text-[var(--text-secondary)] prose prose-sm prose-invert max-w-none bg-[var(--bg-secondary)]/30 rounded-md p-3 border border-[var(--border-subtle)]/50">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{q}</ReactMarkdown>
+                </div>
               ))}
-            </ul>
+            </div>
           </div>
         )}
 
@@ -139,7 +142,9 @@ export function ApprovalCard({ approval }: ApprovalCardProps) {
         {/* Show submitted feedback */}
         {isResolved && approval.feedback && (
           <div className="mt-2 p-2 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-subtle)]">
-            <p className="text-xs text-[var(--text-muted)] font-medium mb-1">Feedback:</p>
+            <p className="text-xs text-[var(--text-muted)] font-medium mb-1">
+              {isQuestionType ? 'Answer:' : 'Feedback:'}
+            </p>
             <p className="text-sm text-[var(--text-secondary)]">{approval.feedback}</p>
           </div>
         )}

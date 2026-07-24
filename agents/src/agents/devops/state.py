@@ -11,6 +11,7 @@ class DevOpsState(BaseModel):
     
     # ── Planning & Validation ──────────────────────────────────────────────────
     deployment_plan: str = Field(default="", description="Generated IaC, Dockerfiles, and CI scripts")
+    deployment_commands: List[str] = Field(default_factory=list, description="Shell commands needed to deploy the app")
     iac_validation_notes: str = Field(default="", description="Linter output from validate_iac_config tool")
     iteration_count: int = Field(default=0, description="Number of times the agent tried to fix IaC bugs")
     active_pr_number: int = Field(default=0, description="The PR number created by this agent")

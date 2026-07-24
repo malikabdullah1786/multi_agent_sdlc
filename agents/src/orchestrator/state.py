@@ -6,7 +6,7 @@ from typing import List,Dict,Any
 from datetime import datetime
 
 # THIS IS THE PARENT AND GLOBAL STATE
-class WorkflowSate(BaseModel):
+class WorkflowState(BaseModel):
     projectId:str=Field(description="Project ID")
     workflowId:str=Field(description="Workflow ID")
     user_req:str=Field(description="User requirement")

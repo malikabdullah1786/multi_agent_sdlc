@@ -40,6 +40,7 @@ class WorkflowResponse(BaseModel):
     project_id: Optional[int] = None
     current_state: str
     current_subgraph_node: Optional[str] = None
+    completed_nodes: Optional[str] = "[]"  # JSON list of completed node names
     status: str
     source_branch: Optional[str] = None
     target_branch: Optional[str] = None

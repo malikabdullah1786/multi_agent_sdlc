@@ -17,12 +17,12 @@ from langgraph.types import interrupt
 
 from agents.src.agents.product_manager.state import ProductManagerState
 from agents.src.agents.product_manager.tools import (
-    rag_search,
     create_jira_epic,
     create_jira_tickets,
     create_slack_channel,
     post_slack_message,
 )
+from agents.src.shared.tools import rag_search
 
 # ---------------------------------------------------------------------------
 # LLM setup
@@ -93,6 +93,7 @@ def write_prd_node(state: ProductManagerState) -> dict:
         ) or "None specified.",
         complexity_level=state.complexity_level or "medium",
         project_type=state.project_type or "other",
+        previous_draft=(state.prd_draft or "No previous draft.")[:6000],
         user_feedback=state.user_feedback or "No previous feedback.",
     )
 

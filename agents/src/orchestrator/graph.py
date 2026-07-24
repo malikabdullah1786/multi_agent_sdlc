@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command, interrupt
-from agents.src.orchestrator.state import WorkflowSate
+from agents.src.orchestrator.state import WorkflowState
 
 # Import all compiled subgraphs
 from agents.src.agents.planning.graph import planning_subgraph
@@ -23,67 +23,90 @@ from langgraph.errors import GraphInterrupt
 
 _subgraph_counters = {}
 
-def _run_subgraph_with_interrupts(subgraph, initial_input, config):
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
     thread_id = config["configurable"]["thread_id"]
     if thread_id not in _subgraph_counters:
         _subgraph_counters[thread_id] = 0
         
-    # First, if the subgraph hasn't started at all, run it with initial_input
-    sub_state = subgraph.get_state(config)
-    if not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
-        for event in subgraph.stream(initial_input, config=config):
-            for sub_node, _ in event.items():
-                if sub_node != "__interrupt__":
-                    from backend.telemetry import broadcast_subgraph_node
-                    broadcast_subgraph_node(sub_node, thread_id)
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
+        await checkpointer.setup()
+        bound_subgraph = subgraph.builder.compile(checkpointer=checkpointer)
+
+        # First, if the subgraph hasn't started at all, run it with initial_input
+        sub_state = await bound_subgraph.aget_state(config)
+        if not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
+            async for event in bound_subgraph.astream(initial_input, config=config):
+                for sub_node, _ in event.items():
+                    if sub_node != "__interrupt__":
+                        from backend.telemetry import broadcast_subgraph_node
+                        broadcast_subgraph_node(sub_node, thread_id)
+                
+        local_count = 0
+        # Process any interrupts in a loop
+        while True:
+            sub_state = await bound_subgraph.aget_state(config)
+            has_sub_interrupts = False
+            payload = "Awaiting approval"
             
-    local_count = 0
-    # Process any interrupts in a loop
-    while True:
-        sub_state = subgraph.get_state(config)
-        has_sub_interrupts = False
-        payload = "Awaiting approval"
-        
-        if sub_state.tasks:
-            for task in sub_state.tasks:
-                if task.interrupts:
-                    has_sub_interrupts = True
-                    payload = task.interrupts[0].value
-                    break
+            if sub_state.tasks:
+                for task in sub_state.tasks:
+                    if task.interrupts:
+                        has_sub_interrupts = True
+                        payload = task.interrupts[0].value
+                        break
+                        
+            if not sub_state.next and not has_sub_interrupts:
+                break  # Subgraph is completely finished
+                
+            # If the subgraph is paused at a user interaction node (like user_approval),
+            # broadcast this node name to the UI so the active highlight moves to it.
+            if has_sub_interrupts and sub_state.next:
+                from backend.telemetry import broadcast_subgraph_node
+                broadcast_subgraph_node(sub_state.next[0], thread_id)
+
+                # Subgraph is paused at an interrupt. Bubble interrupt to parent.
+                user_response = interrupt(payload)
+                
+                local_count += 1
+                
+                # If we have already streamed this interrupt to the subgraph in memory,
+                # skip streaming to avoid breaking the state during LangGraph replays.
+                if local_count <= _subgraph_counters[thread_id]:
+                    continue
                     
-        if not sub_state.next and not has_sub_interrupts:
-            break  # Subgraph is completely finished
-            
-        # Subgraph is paused. Bubble interrupt to parent.
-        user_response = interrupt(payload)
-        
-        local_count += 1
-        
-        # If we have already streamed this interrupt to the subgraph in memory,
-        # skip streaming to avoid breaking the state during LangGraph replays.
-        if local_count <= _subgraph_counters[thread_id]:
-            continue
-            
-        # We haven't streamed this one yet. Stream it!
-        _subgraph_counters[thread_id] += 1
-        
-        # Resume the subgraph with the user's response
-        for event in subgraph.stream(Command(resume=user_response), config=config):
-            for sub_node, _ in event.items():
-                if sub_node != "__interrupt__":
-                    from backend.telemetry import broadcast_subgraph_node
-                    broadcast_subgraph_node(sub_node, thread_id)
-                    import time
-                    print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
-                    
-    return subgraph.get_state(config).values
+                # We haven't streamed this one yet. Stream it!
+                _subgraph_counters[thread_id] += 1
+                
+                # Resume the subgraph with the user's response
+                async for event in bound_subgraph.astream(Command(resume=user_response), config=config):
+                    for sub_node, _ in event.items():
+                        if sub_node != "__interrupt__":
+                            from backend.telemetry import broadcast_subgraph_node
+                            broadcast_subgraph_node(sub_node, thread_id)
+                            import time
+                            print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+            else:
+                # has_sub_interrupts is False, but sub_state.next is True
+                # This means the subgraph was interrupted by an error and needs to be retried
+                async for event in bound_subgraph.astream(None, config=config):
+                    for sub_node, _ in event.items():
+                        if sub_node != "__interrupt__":
+                            from backend.telemetry import broadcast_subgraph_node
+                            broadcast_subgraph_node(sub_node, thread_id)
+                            import time
+                            print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+                        
+        final_state = await bound_subgraph.aget_state(config)
+        return final_state.values
 
 # ===========================================================================
 # WRAPPER NODES (Passing state between subgraphs)
 # ===========================================================================
 
-def planning_stage(state: WorkflowSate) -> dict:
-    out = _run_subgraph_with_interrupts(
+async def planning_stage(state: WorkflowState) -> dict:
+    out = await _run_subgraph_with_interrupts(
         planning_subgraph,
         {"user_req": state.user_req},
         {"configurable": {"thread_id": f"{state.workflowId}-planning"}}
@@ -91,8 +114,8 @@ def planning_stage(state: WorkflowSate) -> dict:
     updated_req = (out.get("user_req") if isinstance(out, dict) else None) or state.user_req
     return {"user_req": updated_req}
 
-def pm_phase_a_stage(state: WorkflowSate) -> dict:
-    out = _run_subgraph_with_interrupts(
+async def pm_phase_a_stage(state: WorkflowState) -> dict:
+    out = await _run_subgraph_with_interrupts(
         pm_phase_a_subgraph,
         {"user_req": state.user_req},
         {"configurable": {"thread_id": f"{state.workflowId}-pm_a"}}
@@ -105,8 +128,8 @@ def pm_phase_a_stage(state: WorkflowSate) -> dict:
         "github_repo_name": repo_name
     }
 
-def architect_stage(state: WorkflowSate) -> dict:
-    out = _run_subgraph_with_interrupts(
+async def architect_stage(state: WorkflowState) -> dict:
+    out = await _run_subgraph_with_interrupts(
         architect_subgraph,
         {
             "user_req": state.prd,
@@ -119,8 +142,8 @@ def architect_stage(state: WorkflowSate) -> dict:
         "final_design_doc": out.get("final_design_doc", "")
     }
 
-def task_breakdown_stage(state: WorkflowSate) -> dict:
-    out = _run_subgraph_with_interrupts(
+async def task_breakdown_stage(state: WorkflowState) -> dict:
+    out = await _run_subgraph_with_interrupts(
         task_breakdown_subgraph,
         {
             "prd": state.prd,
@@ -145,8 +168,8 @@ def task_breakdown_stage(state: WorkflowSate) -> dict:
         "completed_task_titles": []
     }
 
-def pm_phase_b_stage(state: WorkflowSate) -> dict:
-    _run_subgraph_with_interrupts(
+async def pm_phase_b_stage(state: WorkflowState) -> dict:
+    await _run_subgraph_with_interrupts(
         pm_phase_b_subgraph,
         {
             "workflow_tasks": state.workflow_tasks,
@@ -154,7 +177,7 @@ def pm_phase_b_stage(state: WorkflowSate) -> dict:
             "prd": state.prd,
             "project_name": state.project_name
         },
-        {"configurable": {"thread_id": state.workflowId}}
+        {"configurable": {"thread_id": f"{state.workflowId}-pm_b"}}
     )
     return {}
 
@@ -162,7 +185,7 @@ def pm_phase_b_stage(state: WorkflowSate) -> dict:
 # DISPATCHER LOOP & WRAPPERS
 # ===========================================================================
 
-def dispatcher_stage(state: WorkflowSate) -> dict:
+def dispatcher_stage(state: WorkflowState) -> dict:
     """
     Evaluates dependencies and priority, picks the next agent role to execute,
     and queues up their ready tasks.
@@ -201,7 +224,7 @@ def dispatcher_stage(state: WorkflowSate) -> dict:
     
     return {"active_role": chosen_role, "active_tasks": tasks_for_role}
 
-def _dispatcher_router(state: WorkflowSate) -> str:
+def _dispatcher_router(state: WorkflowState) -> str:
     """Routes execution to the active agent."""
     role = state.active_role
     if not role:
@@ -212,14 +235,26 @@ def _dispatcher_router(state: WorkflowSate) -> str:
     if role == "frontend":
         return "frontend_dev_stage"
         
-    return f"{role}_stage"
+    # Strictly prevent routing back to setup phases (planning, architect, etc)
+    # which causes the orchestrator to loop and restart graph executions.
+    valid_stages = {
+        "database_engineer_stage", "devops_stage", "backend_dev_stage", 
+        "frontend_dev_stage", "qa_stage", "reviewer_stage", "security_stage"
+    }
+    
+    target_stage = f"{role}_stage"
+    if target_stage not in valid_stages:
+        print(f"Warning: Invalid assignee_role '{role}'. Defaulting to 'backend_dev_stage'.")
+        return "backend_dev_stage"
+        
+    return target_stage
 
 # ---------------------------------------------------------------------------
 # AGENT WRAPPER STAGES
 # ---------------------------------------------------------------------------
-def _execute_agent_subgraph(state: WorkflowSate, subgraph) -> dict:
+async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str) -> dict:
     # Send only active_tasks to the sub-agent
-    out = _run_subgraph_with_interrupts(
+    out = await _run_subgraph_with_interrupts(
         subgraph,
         {
             "project_name": state.project_name if state.project_name else state.projectId,
@@ -230,7 +265,7 @@ def _execute_agent_subgraph(state: WorkflowSate, subgraph) -> dict:
             "active_pr_number": state.active_pr_number,
             "github_repo_name": state.github_repo_name
         },
-        {"configurable": {"thread_id": state.workflowId}}
+        {"configurable": {"thread_id": f"{state.workflowId}-{role_name}"}}
     )
     
     new_completed = state.completed_task_titles.copy()
@@ -268,32 +303,32 @@ def _execute_agent_subgraph(state: WorkflowSate, subgraph) -> dict:
         "active_pr_number": active_pr_number
     }
 
-def database_engineer_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, database_engineer_subgraph)
+async def database_engineer_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, database_engineer_subgraph, "database_engineer")
 
-def devops_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, devops_subgraph)
+async def devops_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, devops_subgraph, "devops")
 
-def backend_dev_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, backend_dev_subgraph)
+async def backend_dev_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, backend_dev_subgraph, "backend")
 
-def frontend_dev_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, frontend_dev_subgraph)
+async def frontend_dev_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, frontend_dev_subgraph, "frontend")
 
-def qa_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, qa_subgraph)
+async def qa_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, qa_subgraph, "qa")
 
-def reviewer_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, reviewer_subgraph)
+async def reviewer_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, reviewer_subgraph, "reviewer")
 
-def security_stage(state: WorkflowSate) -> dict:
-    return _execute_agent_subgraph(state, security_subgraph)
+async def security_stage(state: WorkflowState) -> dict:
+    return await _execute_agent_subgraph(state, security_subgraph, "security")
 
 # ===========================================================================
 # PARENT GRAPH ASSEMBLY
 # ===========================================================================
 
-parent_workflow = StateGraph(WorkflowSate)
+parent_workflow = StateGraph(WorkflowState)
 
 # Setup Phase Nodes
 parent_workflow.add_node("planning_stage", planning_stage)
@@ -345,7 +380,9 @@ parent_workflow.add_edge("qa_stage", "dispatcher_stage")
 parent_workflow.add_edge("reviewer_stage", "dispatcher_stage")
 parent_workflow.add_edge("security_stage", "dispatcher_stage")
 
-from langgraph.checkpoint.memory import MemorySaver
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 
-checkpointer = MemorySaver()
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
 orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)

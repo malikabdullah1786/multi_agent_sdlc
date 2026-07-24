@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { FileNode } from '@/types/project';
 import { useProjectViewStore } from '@/store/projectViewStore';
+import { getFileContent } from '@/lib/api';
 import {
   ChevronRight,
   ChevronDown,
@@ -47,6 +48,15 @@ function TreeItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
       setIsOpen(!isOpen);
     } else {
       selectFile(node);
+      if (node.content === undefined) {
+        getFileContent(node.path)
+          .then((data) => {
+            if (data && data.content !== undefined) {
+              selectFile({ ...node, content: data.content });
+            }
+          })
+          .catch((err) => console.warn('Could not load file content:', err));
+      }
     }
   };
 

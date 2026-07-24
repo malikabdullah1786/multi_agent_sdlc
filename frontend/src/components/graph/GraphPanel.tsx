@@ -33,10 +33,10 @@ function getNodeStyle(status: string, nodeColor?: string) {
     case 'running':
       return {
         ...base,
-        background: 'var(--bg-elevated)',
-        border: `2px solid ${nodeColor || 'var(--accent-primary)'}`,
-        color: 'var(--text-primary)',
-        boxShadow: `0 0 20px ${nodeColor || 'var(--accent-primary)'}33`,
+        background: 'rgba(245, 158, 11, 0.15)',
+        border: '2px solid #f59e0b',
+        color: '#fef08a',
+        boxShadow: '0 0 20px rgba(245, 158, 11, 0.45)',
       };
     case 'completed':
       return {
@@ -55,9 +55,9 @@ function getNodeStyle(status: string, nodeColor?: string) {
     case 'interrupted':
       return {
         ...base,
-        background: 'var(--state-approval-bg)',
-        border: '1.5px solid var(--state-approval)',
-        color: 'var(--state-approval)',
+        background: 'rgba(245, 158, 11, 0.1)',
+        border: '1.5px solid #f59e0b',
+        color: '#f59e0b',
       };
     default: // pending
       return {
@@ -87,32 +87,41 @@ export function GraphView({ type }: GraphViewProps) {
   // Convert to ReactFlow format
   const nodes: Node[] = useMemo(
     () =>
-      sourceNodes.map((n) => ({
-        id: n.id,
-        position: n.position || { x: 0, y: 0 },
-        data: {
-          label: (
-            <div className="flex items-center gap-1.5 justify-center">
-              {n.status === 'completed' && <span className="text-xs">✅</span>}
-              {n.status === 'running' && <span className="text-xs animate-breathe">⚡</span>}
-              {n.status === 'interrupted' && <span className="text-xs">⏳</span>}
-              <span>{n.label}</span>
-            </div>
-          ),
-        },
-        style: getNodeStyle(n.status, n.nodeColor),
-        draggable: false,
-      })),
-    [sourceNodes]
+      sourceNodes.map((n) => {
+        const isRunning =
+          n.status === 'running' ||
+          (type === 'parent' && activeSubgraph && currentWorkflow?.activeNodeId === n.id);
+
+        const effectiveStatus = isRunning ? 'running' : n.status;
+
+        return {
+          id: n.id,
+          position: n.position || { x: 0, y: 0 },
+          data: {
+            label: (
+              <div className="flex items-center gap-1.5 justify-center">
+                {effectiveStatus === 'completed' && <span className="text-xs">✅</span>}
+                {effectiveStatus === 'running' && <span className="text-xs text-amber-400 animate-breathe">⚡</span>}
+                {effectiveStatus === 'interrupted' && <span className="text-xs">⏳</span>}
+                <span>{n.label}</span>
+              </div>
+            ),
+          },
+          style: getNodeStyle(effectiveStatus, n.nodeColor),
+          draggable: false,
+        };
+      }),
+    [sourceNodes, type, activeSubgraph, currentWorkflow?.activeNodeId]
   );
 
   const edges: Edge[] = useMemo(
     () =>
       sourceEdges.map((e) => {
         const sourceNode = sourceNodes.find((n) => n.id === e.from);
-        const targetNode = sourceNodes.find((n) => n.id === e.to);
-        const isActive =
-          sourceNode?.status === 'running' || sourceNode?.status === 'completed';
+        const isSourceRunning =
+          sourceNode?.status === 'running' ||
+          (type === 'parent' && currentWorkflow?.activeNodeId === sourceNode?.id && Boolean(activeSubgraph));
+        const isActive = Boolean(isSourceRunning || sourceNode?.status === 'completed');
 
         return {
           id: e.id,
@@ -121,7 +130,7 @@ export function GraphView({ type }: GraphViewProps) {
           label: e.label,
           animated: isActive,
           style: {
-            stroke: isActive ? 'var(--accent-primary)' : 'var(--border-default)',
+            stroke: isSourceRunning ? '#f59e0b' : (isActive ? 'var(--accent-primary)' : 'var(--border-default)'),
             strokeWidth: isActive ? 2 : 1,
             opacity: isActive ? 1 : 0.4,
           },
@@ -138,11 +147,11 @@ export function GraphView({ type }: GraphViewProps) {
             type: MarkerType.ArrowClosed,
             width: 12,
             height: 12,
-            color: isActive ? 'var(--accent-primary)' : 'var(--border-default)',
+            color: isSourceRunning ? '#f59e0b' : (isActive ? 'var(--accent-primary)' : 'var(--border-default)'),
           },
         };
       }),
-    [sourceEdges, sourceNodes]
+    [sourceEdges, sourceNodes, type, currentWorkflow?.activeNodeId, activeSubgraph]
   );
 
   if (type === 'subgraph' && !activeSubgraph) {

@@ -3,14 +3,16 @@
 import React from 'react';
 import { useWorkflowStore } from '@/store/workflowStore';
 import { useChatStore } from '@/store/chatStore';
+import { useProjectViewStore } from '@/store/projectViewStore';
 import { AGENT_DISPLAY } from '@/types/agent';
 import { AgentStateIndicator } from '@/components/chat/AgentStateIndicator';
 import { PIPELINE_PHASES, PARENT_GRAPH_NODES, PARENT_GRAPH_EDGES } from '@/lib/graphData';
 import { Workflow } from '@/types/workflow';
+import { disconnectRealWorkflow } from '@/lib/realWorkflow';
 import { Wifi, WifiOff, Activity, Plus } from 'lucide-react';
 
 export function Header() {
-  const { currentWorkflow, setCurrentWorkflow } = useWorkflowStore();
+  const { currentWorkflow, setCurrentWorkflow, setActiveSubgraph } = useWorkflowStore();
   const { activeAgent, activeAgentState, isConnected } = useChatStore();
 
   const agentDisplay = activeAgent ? AGENT_DISPLAY[activeAgent] : null;
@@ -19,14 +21,14 @@ export function Header() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('activeProjectId');
     }
-    useChatStore.setState({
-      messages: [],
-      pendingApproval: null,
-      activeAgent: null,
-      activeAgentState: 'idle',
-      activeAgentNode: null,
-    });
 
+    // Disconnect previous websocket
+    disconnectRealWorkflow();
+
+    // Reset chat store
+    useChatStore.getState().resetAll();
+
+    // Reset workflow graph and subgraph
     const resetWorkflow: Workflow = {
       id: `wf-${Date.now()}`,
       projectId: 'new-project',
@@ -39,6 +41,12 @@ export function Header() {
       totalPhases: 6,
     };
     setCurrentWorkflow(resetWorkflow);
+    setActiveSubgraph(null);
+
+    // Reset project view (files, diffs, documents)
+    useProjectViewStore.getState().setFileTree([]);
+    useProjectViewStore.getState().setDiffs([]);
+    useProjectViewStore.getState().setDocuments([]);
   };
 
   // Calculate pipeline progress

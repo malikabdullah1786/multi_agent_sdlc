@@ -4,7 +4,7 @@ Security Agent — MCP and Internal Tools
 Tools for static application security testing (SAST), Software Composition Analysis (SCA),
 and Jira ticket integration for zero-days.
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 import os
 import subprocess
 from pathlib import Path

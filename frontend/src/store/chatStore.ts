@@ -23,6 +23,7 @@ interface ChatState {
   submitApproval: (approvalId: string, approved: boolean, feedback?: string) => void;
   setConnected: (connected: boolean) => void;
   clearMessages: () => void;
+  resetAll: () => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -81,4 +82,12 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setConnected: (connected) => set({ isConnected: connected }),
   clearMessages: () => set({ messages: [], pendingApproval: null }),
+  resetAll: () => set({
+    messages: [],
+    activeAgent: null,
+    activeAgentState: null,
+    activeAgentNode: null,
+    pendingApproval: null,
+    isConnected: true, // Hide error banner before a project is created
+  }),
 }));

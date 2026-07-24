@@ -4,39 +4,13 @@ Architect Agent — MCP and Internal Tools
 MCP Tools: Tavily (web search), Fetch (docs), GitHub (reference implementations)
 Internal Tools: RAG search, Schema validator, API spec linter
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 from typing import List, Dict, Any
 import re
 
 
 # ---------------------------------------------------------------------------
 # RAG Search (Internal)
-# ---------------------------------------------------------------------------
-
-def _get_rag_pipeline():
-    from agents.src.rag import RAGPipeline
-    return RAGPipeline()
-
-
-@tool
-def rag_search(query: str, k: int = 5) -> str:
-    """
-    Search the internal knowledge base for past architecture decision records (ADRs),
-    previous system designs, and uploaded technical documentation.
-    """
-    pipeline = _get_rag_pipeline()
-    results = pipeline.hybrid_search(query=query, k=k)
-    if not results:
-        return "No relevant documents found in the internal knowledge base."
-    chunks = [
-        f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
-        for doc in results
-    ]
-    return "\n\n---\n\n".join(chunks)
-
-
-# ---------------------------------------------------------------------------
-# Schema Validator (Internal)
 # ---------------------------------------------------------------------------
 
 @tool

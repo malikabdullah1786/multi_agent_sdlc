@@ -45,4 +45,10 @@ workflow.add_edge("analyze_vulnerabilities", "enforce_security_gate")
 workflow.add_edge("enforce_security_gate", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
-security_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+security_subgraph = workflow.compile(checkpointer=checkpointer)

@@ -4,7 +4,7 @@ export type AgentState =
   | 'thinking'
   | 'drafting'
   | 'reviewing'
-  | 'waiting_approval'
+  | 'awaiting_approval'
   | 'executing'
   | 'completed'
   | 'error';
@@ -64,7 +64,7 @@ export const AGENT_STATE_DISPLAY: Record<AgentState, { label: string; icon: stri
   thinking: { label: 'Thinking', icon: '🧠', cssClass: 'text-[var(--state-thinking)]' },
   drafting: { label: 'Drafting', icon: '📝', cssClass: 'text-[var(--state-drafting)]' },
   reviewing: { label: 'Reviewing', icon: '🔍', cssClass: 'text-[var(--state-reviewing)]' },
-  waiting_approval: { label: 'Awaiting Approval', icon: '⏳', cssClass: 'text-[var(--state-approval)]' },
+  awaiting_approval: { label: 'Awaiting Approval', icon: '⏳', cssClass: 'text-[var(--state-approval)]' },
   executing: { label: 'Executing', icon: '⚡', cssClass: 'text-[var(--state-executing)]' },
   completed: { label: 'Completed', icon: '✅', cssClass: 'text-[var(--state-completed)]' },
   error: { label: 'Error', icon: '❌', cssClass: 'text-[var(--state-error)]' },

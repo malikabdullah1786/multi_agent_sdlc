@@ -4,7 +4,7 @@ Product Manager Agent — MCP and Internal Tools
 Phase A tools: Web search, RAG search
 Phase B tools: Jira MCP (Epic + Ticket creation), Slack MCP (Channel creation + messaging)
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 from typing import List, Dict, Any
 import os
 import contextlib
@@ -15,31 +15,6 @@ env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../
 load_dotenv(env_path)
 # ---------------------------------------------------------------------------
 # RAG Search (Internal)
-# ---------------------------------------------------------------------------
-
-def _get_rag_pipeline():
-    from agents.src.rag import RAGPipeline
-    return RAGPipeline()
-
-
-@tool
-def rag_search(query: str, k: int = 5) -> str:
-    """
-    Search the internal knowledge base for past PRDs, personas, or domain docs.
-    """
-    pipeline = _get_rag_pipeline()
-    results = pipeline.hybrid_search(query=query, k=k)
-    if not results:
-        return "No relevant documents found in the internal knowledge base."
-    chunks = [
-        f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
-        for doc in results
-    ]
-    return "\n\n---\n\n".join(chunks)
-
-
-# ---------------------------------------------------------------------------
-# Jira Tools (via Jira MCP or direct Atlassian REST API)
 # ---------------------------------------------------------------------------
 
 @tool

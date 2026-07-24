@@ -80,9 +80,11 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
       return {
         activeSubgraph: {
           ...state.activeSubgraph,
-          nodes: state.activeSubgraph.nodes.map((n) =>
-            n.id === nodeId ? { ...n, status: 'running' as const } : n
-          ),
+          nodes: state.activeSubgraph.nodes.map((n) => {
+            if (n.id === nodeId) return { ...n, status: 'running' as const };
+            if (n.status === 'running') return { ...n, status: 'completed' as const };
+            return n;
+          }),
         },
       };
     }),

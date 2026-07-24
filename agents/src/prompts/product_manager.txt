@@ -11,7 +11,12 @@ Type/Complexity: {project_type} / {complexity_level}
 Constraints: {constraints}
 Risks: {risks}
 Context: {web_search_results}
+Previous Draft: {previous_draft}
 Feedback: {user_feedback}
+
+--- REVISION RULE ---
+If previous draft and user feedback are present, you MUST revise the previous draft to incorporate the user's feedback. User feedback OVERRIDES any previous requirements.
+---------------------
 
 Output a structured Markdown document with the following dense sections:
 

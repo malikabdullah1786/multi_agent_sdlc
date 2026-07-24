@@ -12,19 +12,22 @@ from backend.git_service import GitService
 router = APIRouter(prefix="/files", tags=["Files & Git Diff"])
 
 @router.get("/tree")
-async def get_workspace_file_tree(dir_path: str = "."):
-    """Get the file tree structure of the workspace."""
-    if not os.path.exists(dir_path):
-        raise HTTPException(status_code=404, detail="Directory path not found")
-    return GitService.list_file_tree(dir_path)
+async def get_workspace_file_tree(dir_path: str = "output"):
+    """Get the file tree structure of the generated project in the output directory."""
+    target_dir = dir_path if os.path.exists(dir_path) else ("output" if os.path.exists("output") else ".")
+    return GitService.list_file_tree(target_dir)
 
 @router.get("/content")
 async def get_file_content(path: str):
     """Retrieve content of a specific file."""
-    if not os.path.exists(path):
+    target_path = path
+    if not os.path.exists(target_path) and os.path.exists(os.path.join("output", path)):
+        target_path = os.path.join("output", path)
+
+    if not os.path.exists(target_path):
         raise HTTPException(status_code=404, detail="File path not found")
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(target_path, "r", encoding="utf-8") as f:
             content = f.read()
         return {"path": path, "content": content}
     except Exception as e:

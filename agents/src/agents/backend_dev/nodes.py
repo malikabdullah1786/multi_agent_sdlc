@@ -20,9 +20,17 @@ from agents.src.agents.backend_dev.state import BackendDevState
 from agents.src.agents.backend_dev.tools import (
     code_linter,
     run_unit_tests,
+    db_schema_inspector
+)
+from agents.src.shared.tools import (
+    list_directory, 
+    fetch_server_logs, 
+    run_terminal_command,
+    read_file_range,
     semantic_code_search,
-    db_schema_inspector,
-    read_file_range
+    replace_file_content,
+    search_web,
+    rag_search
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -139,24 +147,20 @@ def write_code_node(state: BackendDevState) -> dict:
     formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"terminal_commands\": [\"cmd1\", \"cmd2\"],\n  \"files\": [\n    {\"path\": \"src/file.ts\", \"content\": \"raw code\"}\n  ]\n}\n\nDo not use markdown wrappers unless wrapping the entire JSON block in ```json ... ```. Your output MUST parse successfully via json.loads()."
     
     from langchain_core.tools import tool
-    from agents.src.shared.llm import safe_web_search
     from agents.src.shared.tools import run_terminal_command
-    
-    @tool
-    def search_web(query: str) -> str:
-        """Searches the web for documentation, tutorials, or solutions to coding problems."""
-        return safe_web_search(query)
         
     # Bind tools to the LLM
-    llm_with_tools = _llm.bind_tools([read_file_range, semantic_code_search, search_web, run_terminal_command])
+    tools_list = [read_file_range, semantic_code_search, search_web, run_terminal_command, db_schema_inspector, replace_file_content, list_directory, fetch_server_logs, code_linter, run_unit_tests, rag_search]
+    llm_with_tools = _llm.bind_tools(tools_list)
     
     # Inform the agent it can execute terminal commands, read chunks or search existing code
-    formatted += "\n\nNote: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command in the project directory, call `semantic_code_search` to locate code patterns, call `read_file_range` to view files, or call `search_web` to look up docs. Gather whatever context you need first. Once ready, output your final file generation response."
+    formatted += "\n\nNote: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command in the project directory, call `semantic_code_search` to locate code patterns, call `read_file_range` to view files, call `db_schema_inspector` to view schema, or call `search_web` to look up docs. You can use `list_directory` to explore file paths, and `fetch_server_logs` to debug server crashes. Gather whatever context you need first. Once ready, output your final file generation response."
     formatted += "\n\nCRITICAL RULE: DO NOT use tool calling for your final JSON output. You MUST output your final JSON directly in your message text response, surrounded by ```json ... ```. If you wrap your final JSON in a tool call (like 'json' or 'CodeGenerationResponse'), it will crash the system."
+    formatted += "\n\nBUG FIXING RULE: If you are fixing a small bug, you DO NOT need to output the whole file in the final JSON. Instead, you MUST use the `replace_file_content` tool to surgically fix the file, and then output an empty `files: []` array in your final JSON. Use the full JSON file overwrite ONLY for brand new files or massive rewrites."
     
     messages = [
         SystemMessage(content=formatted),
-        HumanMessage(content="Start your implementation. You can execute shell commands with `run_terminal_command`, search the codebase with `semantic_code_search`, or read files with `read_file_range`. When done, output the final code JSON as plain text.")
+        HumanMessage(content="Start your implementation. You can execute shell commands with `run_terminal_command`, search the codebase with `semantic_code_search`, read files with `read_file_range`, edit files with `replace_file_content`, list directories with `list_directory`, and fetch server logs with `fetch_server_logs`. When done, output the final code JSON as plain text.")
     ]
     
     generated_code_dump = []
@@ -200,31 +204,15 @@ def write_code_node(state: BackendDevState) -> dict:
                 break
                 
             # Process tool calls
+            tool_map = {tool.name: tool for tool in tools_list}
             for tool_call in response.tool_calls:
-                try:
-                    from backend.telemetry import broadcast_tool_call
-                    broadcast_tool_call(tool_call["name"], str(tool_call.get("args", {})))
-                except Exception:
-                    pass
-
-                if tool_call["name"] == "read_file_range":
-                    # Execute tool physically
-                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
-                    result = read_file_range.invoke(tool_call["args"])
+                tool_name = tool_call["name"]
+                if tool_name in tool_map:
+                    print(f"Backend Dev calling tool: {tool_name} with args {tool_call['args']}")
+                    result = tool_map[tool_name].invoke(tool_call["args"])
                     messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
-                elif tool_call["name"] == "semantic_code_search":
-                    # Execute tool physically
-                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
-                    result = semantic_code_search.invoke(tool_call["args"])
-                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
-                elif tool_call["name"] == "search_web":
-                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
-                    result = search_web.invoke(tool_call["args"])
-                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
-                elif tool_call["name"] == "run_terminal_command":
-                    print(f"Backend Dev calling tool: {tool_call['name']} with args {tool_call['args']}")
-                    result = run_terminal_command.invoke(tool_call["args"])
-                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                else:
+                    print(f"Backend Dev called unknown tool: {tool_name}")
                     
         final_content = messages[-1].content
         

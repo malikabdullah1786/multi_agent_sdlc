@@ -19,7 +19,8 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.types import interrupt
 
 from agents.src.agents.planning.state import PlanningState
-from agents.src.agents.planning.tools import rag_search, parse_structured_output
+from agents.src.agents.planning.tools import parse_structured_output
+from agents.src.shared.tools import rag_search
 
 # ---------------------------------------------------------------------------
 # LLM setup  (swap model / provider to your preference)
@@ -147,6 +148,7 @@ def generate_draft_node(state: PlanningState) -> dict:
         rag_results="\n\n".join(state.rag_results) or "No internal knowledge base results found.",
         user_clarification_answers=state.user_clarification_answers or "No clarifications provided.",
         critique_notes=state.critique_notes or "No previous critique.",
+        previous_draft=(state.plan_draft or "No previous draft.")[:6000],
         user_feedback=state.user_feedback or "No previous feedback.",
     )
 

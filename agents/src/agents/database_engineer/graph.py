@@ -81,7 +81,13 @@ workflow.add_conditional_edges(
 workflow.add_edge("push_to_github", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
-database_engineer_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+database_engineer_subgraph = workflow.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     from langchain_core.runnables import RunnableConfig

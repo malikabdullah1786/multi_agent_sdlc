@@ -55,6 +55,7 @@ class ConnectionManager:
             if loop.is_running():
                 loop.create_task(self.broadcast(project_id, event_type, data))
         except RuntimeError:
-            pass
+            if hasattr(self, 'main_loop') and self.main_loop:
+                asyncio.run_coroutine_threadsafe(self.broadcast(project_id, event_type, data), self.main_loop)
 
 ws_manager = ConnectionManager()

@@ -2,6 +2,21 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
+# EAGER WARM-UP: Import massive ML and third-party libraries synchronously on server startup.
+# This prevents the async event loop from freezing for 5-10 seconds on the first user request.
+try:
+    logger = logging.getLogger("fastapi_backend")
+    logger.info("Pre-warming heavy dependencies (LangChain, LangGraph, LLMs)...")
+    import langchain_core
+    import langchain_groq
+    import langgraph
+    import pydantic
+    import jira
+    import slack_sdk
+    logger.info("Dependencies warmed up successfully.")
+except ImportError:
+    pass
+
 os.environ["PYTHONUTF8"] = "1"
 os.environ["PYTHONIOENCODING"] = "utf-8"
 from fastapi import FastAPI
@@ -16,6 +31,7 @@ from backend.routers.logs import router as logs_router
 from backend.routers.files import router as files_router
 from backend.routers.terminal import router as terminal_router
 from backend.routers.ws import router as ws_router
+from backend.routers.documents import router as documents_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fastapi_backend")
@@ -23,6 +39,10 @@ logger = logging.getLogger("fastapi_backend")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager to initialize database tables on startup."""
+    import asyncio
+    from backend.websocket_manager import ws_manager
+    ws_manager.main_loop = asyncio.get_running_loop()
+    
     logger.info("Initializing AgenticDB tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -55,6 +75,7 @@ app.include_router(logs_router)
 app.include_router(files_router)
 app.include_router(terminal_router)
 app.include_router(ws_router)
+app.include_router(documents_router)
 
 @app.get("/")
 async def root_health_check():

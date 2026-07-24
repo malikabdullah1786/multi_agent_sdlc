@@ -17,6 +17,15 @@ from agents.src.agents.reviewer.tools import (
     merge_pull_request,
     run_terminal_command
 )
+from agents.src.shared.tools import (
+    semantic_code_search,
+    read_file_range,
+    replace_file_content,
+    list_directory,
+    fetch_server_logs,
+    search_web,
+    rag_search,
+)
 
 _ROOT_DIR = Path(__file__).resolve().parents[4]
 
@@ -94,6 +103,10 @@ def review_code_node(state: ReviewerState) -> dict:
     """
     Evaluates the code against best practices and the complexity report.
     """
+    from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+    import re
+    import json
+    
     code_content = _get_code_under_review()
     
     prompt = PromptTemplate.from_template(
@@ -116,21 +129,83 @@ def review_code_node(state: ReviewerState) -> dict:
           "feedback": "Your detailed code review feedback and comments",
           "is_approved": false
         }}
+        
+        Note: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command to inspect the workspace or run linters/tests. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the schema. DO NOT output anything else after the JSON block.
         """
     )
     
     formatted = prompt.format(report=state.complexity_report, code=code_content)
+    
+    tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, run_complexity_analysis, leave_pr_comment, merge_pull_request]
+    llm_with_tools = _llm.bind_tools(tools_list)
+    
+    messages = [
+        SystemMessage(content="You are a Principal Software Engineer (Reviewer Agent)."),
+        HumanMessage(content=formatted)
+    ]
+    
+    # ReAct Loop
+    while True:
+        try:
+            response = llm_with_tools.invoke(messages)
+        except Exception as e:
+            if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
+                import ast
+                error_str = str(e)
+                start_idx = error_str.find("'{")
+                end_idx = error_str.rfind("}'") + 2
+                if start_idx != -1 and end_idx != -1:
+                    if end_idx == -1 or end_idx <= start_idx:
+                        end_idx = error_str.rfind("'")
+                    try:
+                        raw_fg = error_str[start_idx:end_idx].replace("\\n", "\n").replace("\\'", "'")
+                        failed_gen = json.loads(raw_fg, strict=False)
+                        args = failed_gen.get("arguments", {})
+                        class DummyResponse:
+                            content = json.dumps(args) if isinstance(args, dict) else str(args)
+                            tool_calls = []
+                        response = DummyResponse()
+                    except Exception:
+                        raise e
+                else:
+                    raise e
+            else:
+                raise e
+                
+        messages.append(response)
+        
+        if not getattr(response, "tool_calls", []):
+            break
+            
+        tool_map = {tool.name: tool for tool in tools_list}
+        for tool_call in response.tool_calls:
+            name = tool_call["name"]
+            print(f"Agent calling tool: {name} with args {tool_call['args']}")
+            if name in tool_map:
+                result = tool_map[name].invoke(tool_call["args"])
+            else:
+                result = f"Error: Tool {name} not found."
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+
     try:
-        # Use structured output only — bind_tools + with_structured_output conflict
-        structured_llm = _llm.with_structured_output(ReviewResponse)
-        response = structured_llm.invoke(formatted)
+        content = response.content
+        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+        if json_match:
+            parsed = json.loads(json_match.group(1) if '```' in content else json_match.group(0))
+        else:
+            parsed = json.loads(content)
+            
+        parsed_response = ReviewResponse(**parsed)
     except Exception as e:
-        print(f"[Reviewer Agent] Structured LLM parsing failed: {e}. Defaulting to approval.")
-        response = ReviewResponse(feedback="Automated review passed with default approval.", is_approved=True)
+        print(f"[Reviewer Agent] JSON parsing failed: {e}. Defaulting to approval.")
+        parsed_response = ReviewResponse(feedback="Automated review passed with default approval.", is_approved=True)
     
     return {
-        "code_review_comments": response.feedback,
-        "code_review_approved": response.is_approved
+        "code_review_comments": parsed_response.feedback,
+        "code_review_approved": parsed_response.is_approved
     }
 
 # ---------------------------------------------------------------------------

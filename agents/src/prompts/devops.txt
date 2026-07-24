@@ -21,14 +21,15 @@ Implementation Rules:
    - Java/Kotlin (Spring Boot) → use `eclipse-temurin:21-jre-alpine`
    - Static site / client-side-only app → do NOT use Docker; generate a GitHub Actions workflow that deploys to GitHub Pages or Netlify instead.
 
-2. **Containerization (Server Apps Only)**: For any app with a server component, create a production-ready `Dockerfile` with multi-stage builds to minimize image size.
-
-3. **Local Orchestration (Server Apps Only)**: Create a `docker-compose.yml` to orchestrate the app and any dependencies (database, cache, message broker) locally.
-
+2. **Deployment Strategy (Docker vs Native)**: Do NOT default to Docker unless explicitly requested in the System Design or if the project has multiple complex microservices (e.g. DB + Cache + API). Prefer native language deployments (e.g., simple `start.sh` bash scripts or `npm run start`) for simpler apps.
+3. **Configuration**:
+   - If using Docker: Create a `Dockerfile` and `docker-compose.yml`.
+   - If using Native: Create a `start.sh` in the root that starts the app in the background.
+   - Or any other deployment strategy as specified in the System Design Document.
 4. **CI/CD Pipeline**: Always create a `.github/workflows/ci.yml` GitHub Actions workflow that:
    - Installs dependencies
    - Runs linting
-   - Runs the test suite
+   - Runs the test suite   
    - Builds the application
    - Deploys (to GitHub Pages for static apps, or pushes Docker image for server apps)
 

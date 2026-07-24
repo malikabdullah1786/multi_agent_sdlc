@@ -19,6 +19,15 @@ from agents.src.agents.devops.tools import (
     push_github_actions,
     run_terminal_command,
 )
+from agents.src.shared.tools import (
+    semantic_code_search,
+    read_file_range,
+    replace_file_content,
+    list_directory,
+    fetch_server_logs,
+    search_web,
+    rag_search,
+)
 
 # ---------------------------------------------------------------------------
 # LLM setup
@@ -95,6 +104,10 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
     Reads the final architecture design document.
     Generates Dockerfiles, docker-compose.yml, and CI/CD pipelines.
     """
+    from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+    import re
+    import json
+    
     prompt_path = _PROMPTS_DIR / "devops.txt"
     prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
     
@@ -107,35 +120,85 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
         linter=state.iac_validation_notes or "None."
     )
     
-    # Use structured output only — bind_tools + with_structured_output conflict
-    # (both try to override the LLM output format, causing JSON parse failures)
-    structured_llm = _llm.with_structured_output(CodeGenerationResponse)
+    formatted += "\n\nNote: You have FULL terminal and file system access. You can call `run_terminal_command`, `semantic_code_search`, `read_file_range`, `replace_file_content`, `list_directory`, `fetch_server_logs`, `search_web`, and `rag_search` to inspect the workspace or look up documentation. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the CodeGenerationResponse schema. DO NOT output anything else after the JSON block."
+    
+    tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, validate_iac_config, run_deployment, health_check_ping, push_github_actions]
+    llm_with_tools = _llm.bind_tools(tools_list)
+    
+    messages = [
+        SystemMessage(content="You are a Principal DevOps Engineer. You write deployment configs and scripts."),
+        HumanMessage(content=formatted)
+    ]
+    
+    # ReAct Loop
+    while True:
+        try:
+            response = llm_with_tools.invoke(messages)
+        except Exception as e:
+            if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
+                import ast
+                error_str = str(e)
+                start_idx = error_str.find("'{")
+                end_idx = error_str.rfind("}'") + 2
+                if start_idx != -1 and end_idx != -1:
+                    if end_idx == -1 or end_idx <= start_idx:
+                        end_idx = error_str.rfind("'")
+                    try:
+                        raw_fg = error_str[start_idx:end_idx].replace("\\n", "\n").replace("\\'", "'")
+                        failed_gen = json.loads(raw_fg, strict=False)
+                        args = failed_gen.get("arguments", {})
+                        class DummyResponse:
+                            content = json.dumps(args) if isinstance(args, dict) else str(args)
+                            tool_calls = []
+                        response = DummyResponse()
+                    except Exception:
+                        raise e
+                else:
+                    raise e
+            else:
+                raise e
+                
+        messages.append(response)
+        
+        if not getattr(response, "tool_calls", []):
+            break
+            
+        tool_map = {tool.name: tool for tool in tools_list}
+        for tool_call in response.tool_calls:
+            name = tool_call["name"]
+            print(f"Agent calling tool: {name} with args {tool_call['args']}")
+            if name in tool_map:
+                result = tool_map[name].invoke(tool_call["args"])
+            else:
+                result = f"Error: Tool {name} not found."
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+
     generated_dump = []
+    deployment_cmds = []
     
     try:
-        response = structured_llm.invoke(formatted)
+        content = response.content
+        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+        if json_match:
+            parsed = json.loads(json_match.group(1) if '```' in content else json_match.group(0))
+        else:
+            parsed = json.loads(content)
+            
+        parsed_response = CodeGenerationResponse(**parsed)
+        
         output_dir = _ROOT_DIR / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Terminal commands
-        for cmd in response.terminal_commands:
-            print(f"DevOps executing: {cmd}")
-            try:
-                # Do not check=True, run safely with check=False to handle errors gracefully
-                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
-                if res.returncode != 0:
-                    generated_dump.append(f"Command '{cmd}' failed.\n{res.stderr or res.stdout}")
-                else:
-                    generated_dump.append(f"Command '{cmd}' succeeded.\n")
-            except subprocess.TimeoutExpired:
-                print(f"Command '{cmd}' timed out.")
-                generated_dump.append(f"Command '{cmd}' timed out.")
-            except Exception as e:
-                print(f"Command '{cmd}' failed: {e}")
-                generated_dump.append(f"Command '{cmd}' failed: {e}")
+        deployment_cmds = parsed_response.terminal_commands
+        if deployment_cmds:
+            generated_dump.append("Planned deployment commands:\n" + "\n".join(f"- {c}" for c in deployment_cmds))
         
         # Files
-        for f in response.files:
+        for f in parsed_response.files:
             file_path = output_dir / f.path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(f.content, encoding="utf-8")
@@ -143,11 +206,12 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
             generated_dump.append(f"File: output/{f.path}\n{f.content}")
             
     except Exception as e:
-        print(f"Structured output failed: {e}")
+        print(f"JSON parsing failed: {e}")
         generated_dump.append(f"Error: {e}")
     
     return {
         "deployment_plan": "\n\n".join(generated_dump),
+        "deployment_commands": deployment_cmds,
         "iteration_count": state.iteration_count + 1
     }
 
@@ -212,36 +276,38 @@ def approve_deployment_node(state: DevOpsState) -> dict:
 def execute_deployment_node(state: DevOpsState) -> dict:
     """
     Executes the deployment against the physical environment (Docker/Cloud)
-    and pushes CI/CD pipelines to GitHub.
+    by running the dynamic commands generated by the DevOps agent.
     """
-    try:
-        output_dir = _ROOT_DIR / "output"
-        compose_file = output_dir / "docker-compose.yml"
-        if compose_file.exists():
-            print("Running docker compose up -d --build...")
-            res = subprocess.run("docker compose up -d --build", shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
-            logs = f"SUCCESS: Containers started.\n{res.stdout}"
-            
-            # Attempt to parse port to provide a clickable link
-            try:
-                import yaml
-                data = yaml.safe_load(compose_file.read_text())
-                for service_name, service_data in data.get("services", {}).items():
-                    if "ports" in service_data and len(service_data["ports"]) > 0:
-                        port_mapping = str(service_data["ports"][0])
-                        # e.g., "3000:3000" or "8080:80"
-                        host_port = port_mapping.split(":")[0].strip('"').strip("'")
-                        print(f"\n🚀 App is running! Click here to view: http://localhost:{host_port}\n")
-                        break
-            except Exception:
-                pass
-                
-        else:
-            logs = "SUCCESS: Deployment mocked (no docker-compose.yml found)."
-    except Exception as e:
-        logs = f"Deployment failed: {e}"
+    output_dir = _ROOT_DIR / "output"
+    logs = []
+    
+    cmds_to_run = getattr(state, "deployment_commands", [])
+    if not cmds_to_run:
+        return {"deployment_logs": "SUCCESS: No deployment commands provided by the agent."}
         
-    return {"deployment_logs": logs}
+    for cmd in cmds_to_run:
+        print(f"DevOps Executing: {cmd}")
+        try:
+            # Check for background daemons
+            DAEMON_SERVER_PREFIXES = [
+                "npm run dev", "npm run start", "npm start", "node server", 
+                "python manage.py runserver", "flask run", "uvicorn", "npx next dev", "pm2", "bash start.sh", "start.sh", "docker compose up"
+            ]
+            
+            if any(cmd.strip().startswith(prefix) for prefix in DAEMON_SERVER_PREFIXES) and "-d" not in cmd:
+                # Background the script if it's a daemon and doesn't already have detached flag
+                subprocess.Popen(cmd, shell=True, cwd=str(output_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logs.append(f"SUCCESS: Started daemon '{cmd}' in background.")
+            else:
+                res = subprocess.run(cmd, shell=True, cwd=str(output_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                if res.returncode == 0:
+                    logs.append(f"SUCCESS: {cmd}\n{res.stdout[-4000:]}")
+                else:
+                    logs.append(f"FAILED: {cmd}\n{(res.stderr or res.stdout)[-4000:]}")
+        except Exception as e:
+            logs.append(f"Error running {cmd}: {e}")
+            
+    return {"deployment_logs": "\n\n".join(logs)}
 
 # ---------------------------------------------------------------------------
 # 5. Verify Health Node

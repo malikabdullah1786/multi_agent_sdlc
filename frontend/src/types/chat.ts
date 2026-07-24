@@ -19,7 +19,7 @@ export interface ChatMessage {
 
 // ── Approval Types ───────────────────────────────────────────────────────
 
-export type ApprovalType = 'prd' | 'design' | 'schema' | 'api' | 'directory' | 'deployment' | 'general';
+export type ApprovalType = 'prd' | 'clarification' | 'clarifying_questions' | 'question' | 'design' | 'schema' | 'api' | 'directory' | 'deployment' | 'general';
 
 export interface ApprovalRequest {
   id: string;

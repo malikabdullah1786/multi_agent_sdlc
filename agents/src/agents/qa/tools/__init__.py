@@ -4,7 +4,7 @@ QA Agent — MCP and Internal Tools
 These tools support automated E2E testing, exploratory browser testing, 
 and automated Jira bug reporting.
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 import os
 import requests
 import subprocess
@@ -46,7 +46,7 @@ def run_test_suite() -> str:
     
     # Check what kind of tests exist
     if (output_dir / "playwright.config.ts").exists() or (output_dir / "playwright.config.js").exists():
-        cmd = "npx playwright test"
+        cmd = "npx playwright test --headed --workers=1"
     elif (output_dir / "package.json").exists():
         cmd = "npm test"
     elif (output_dir / "pytest.ini").exists():

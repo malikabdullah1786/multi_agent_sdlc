@@ -149,10 +149,15 @@ workflow.add_conditional_edges(
         "finalize_design": "finalize_design",
     },
 )
-
 workflow.add_edge("finalize_design", END)
 
-architect_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+architect_subgraph = workflow.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     import os

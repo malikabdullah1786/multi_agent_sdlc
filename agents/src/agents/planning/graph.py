@@ -122,8 +122,13 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("finalize", END)
 
-# Compile with in-memory checkpointer (parent graph will inject Postgres checkpointer)
-planning_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+planning_subgraph = workflow.compile(checkpointer=checkpointer)
 
 
 if __name__ == "__main__":

@@ -54,12 +54,17 @@ async def respond_to_approval(
 
     feedback_text = payload.feedback or ""
 
+    # Immediately mark approval as processed in DB
+    approval.status = "APPROVED" if not feedback_text or feedback_text.lower() in ["approve", "yes", "ok"] else "FEEDBACK_SUBMITTED"
+    approval.feed_back = feedback_text if feedback_text else "Approved"
+
     # If initial project description was short/greeting, update project.description in DB with user's detailed requirement
     if project and feedback_text:
         desc_lower = (project.description or "").strip().lower()
         if len(desc_lower) < 15 or desc_lower in ["hi", "hiiiii", "hello", "hey"]:
             project.description = feedback_text
-            await db.commit()
+
+    await db.commit()
 
     # Launch pipeline resume in background task
     background_tasks.add_task(

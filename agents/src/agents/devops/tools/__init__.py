@@ -3,7 +3,7 @@ DevOps Agent — MCP and Internal Tools
 
 These tools interact with Docker and GitHub.
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 import subprocess
 import requests
 import time
@@ -42,7 +42,7 @@ def validate_iac_config(iac_code: str, config_type: str = "auto") -> str:
         if res.returncode == 0:
             return "VALIDATION_PASSED: The configuration is syntactically correct."
         else:
-            return f"VALIDATION_FAILED: {res.stderr}"
+            return f"VALIDATION_FAILED: {res.stderr[-2000:]}"
     except Exception as e:
         return f"VALIDATION_FAILED: Exception during validation - {e}"
 
@@ -62,11 +62,12 @@ def run_deployment(plan: str) -> str:
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=True
+            check=False
         )
-        return f"DEPLOYMENT_SUCCESS: Containers started.\n{res.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"DEPLOYMENT_FAILED: {e.stderr}"
+        if res.returncode == 0:
+            return f"DEPLOYMENT_SUCCESS: Containers started.\n{res.stdout[-4000:]}"
+        else:
+            return f"DEPLOYMENT_FAILED: {res.stderr[-4000:]}"
     except Exception as e:
         return f"DEPLOYMENT_FAILED: {e}"
 

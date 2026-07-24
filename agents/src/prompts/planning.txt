@@ -89,5 +89,12 @@ User Clarification Answers:
 Previous Critique Notes (if this is a revision):
 {critique_notes}
 
+Previous Draft:
+{previous_draft}
+
 User Feedback (if this is a revision):
 {user_feedback}
+
+--- REVISION RULE ---
+If previous draft and user feedback are present, you MUST modify the previous draft to incorporate the user's feedback. User feedback OVERRIDES any previous requirements.
+---------------------

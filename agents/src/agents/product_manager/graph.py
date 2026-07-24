@@ -58,8 +58,14 @@ phase_a.add_conditional_edges(
     },
 )
 
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
 phase_a.add_edge("finalize_prd", END)
-pm_phase_a_subgraph = phase_a.compile(checkpointer=MemorySaver())
+pm_phase_a_subgraph = phase_a.compile(checkpointer=checkpointer)
 
 # ===========================================================================
 # PHASE B GRAPH (Jira + Slack)
@@ -78,7 +84,7 @@ phase_b.add_edge("create_jira_epic", "create_jira_tickets")
 phase_b.add_edge("create_jira_tickets", "notify_slack")
 phase_b.add_edge("notify_slack", END)
 
-pm_phase_b_subgraph = phase_b.compile(checkpointer=MemorySaver())
+pm_phase_b_subgraph = phase_b.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     import os

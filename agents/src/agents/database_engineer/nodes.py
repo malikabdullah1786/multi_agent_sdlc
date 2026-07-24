@@ -20,7 +20,16 @@ from agents.src.agents.database_engineer.tools import (
     create_project_database,
     run_migrations,
     validate_schema_diff,
-    run_terminal_command,
+    run_terminal_command,       
+)
+from agents.src.shared.tools import (
+    semantic_code_search,
+    read_file_range,
+    replace_file_content,
+    list_directory,
+    fetch_server_logs,
+    search_web,
+    rag_search,
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -32,6 +41,35 @@ _ROOT_DIR = Path(__file__).resolve().parents[4]
 _llm = get_llm(temperature=0.1, max_tokens=4000)
 
 
+def _get_design_doc(state: DatabaseEngineerState) -> str:
+    design_doc = state.final_design_doc or ""
+    if len(design_doc.strip()) < 50:
+        print("DB Engineer: State design doc is empty. Attempting to load from schema_approval file...")
+        try:
+            import glob
+            approval_files = glob.glob(str(_ROOT_DIR / "schema_approval*.md"))
+            if approval_files:
+                approval_files.sort(key=os.path.getmtime, reverse=True)
+                with open(approval_files[0], "r", encoding="utf-8") as f:
+                    design_doc = f.read()
+                print(f"DB Engineer: Successfully loaded design doc ({len(design_doc)} chars) from {approval_files[0]}")
+        except Exception as e:
+            print(f"DB Engineer: Failed to load from file: {e}")
+    return design_doc
+
+def _is_db_required(design_doc: str) -> bool:
+    if len(design_doc.strip()) < 50:
+        return True # Default to true if missing
+    design_lower = design_doc.lower()
+    no_db_signals = [
+        "no database", "no db", "database: none", "in-memory", "localstorage",
+        "browser game", "client-side only", "client side only", "static site",
+        "no backend", "no server", "no persistent", "file-based", "no persistence"
+    ]
+    if any(signal in design_lower for signal in no_db_signals):
+        return False
+    return True
+
 # ---------------------------------------------------------------------------
 # 1. Setup DB Node
 # ---------------------------------------------------------------------------
@@ -39,6 +77,11 @@ def setup_db_node(state: DatabaseEngineerState) -> dict:
     """
     Creates the isolated PostgreSQL database for this project.
     """
+    design_doc = _get_design_doc(state)
+    if not _is_db_required(design_doc):
+        print("DB Engineer: Skipping database setup (no DB required).")
+        return {"db_connection_string": "Skipped: No DB required"}
+
     try:
         conn_string = create_project_database.invoke({"project_name": state.project_name})
     except Exception as e:
@@ -92,36 +135,12 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     Translates the Architect's design document into raw database schema definitions.
     If the design specifies no database is needed, writes a README and skips.
     """
-    # ── Early exit: detect no-DB projects ────────────────────────────────────
-    design_doc = state.final_design_doc or ""
-    
-    # Fallback: If state lost the design doc due to a resume, read it from the generated markdown file
-    if len(design_doc.strip()) < 50:
-        print("DB Engineer: State design doc is empty. Attempting to load from schema_approval file...")
-        try:
-            import glob
-            approval_files = glob.glob(str(_ROOT_DIR / "schema_approval*.md"))
-            if approval_files:
-                # Sort by modification time to get the latest
-                approval_files.sort(key=os.path.getmtime, reverse=True)
-                with open(approval_files[0], "r", encoding="utf-8") as f:
-                    design_doc = f.read()
-                print(f"DB Engineer: Successfully loaded design doc ({len(design_doc)} chars) from {approval_files[0]}")
-        except Exception as e:
-            print(f"DB Engineer: Failed to load from file: {e}")
-            
-    print(f"DB Engineer: Received design doc of length {len(design_doc)}")
+    design_doc = _get_design_doc(state)
     
     if len(design_doc.strip()) < 50:
         raise ValueError("System Design Document is empty or missing! DB Engineer cannot proceed without a design doc.")
         
-    design_lower = design_doc.lower()
-    no_db_signals = [
-        "no database", "no db", "database: none", "in-memory", "localstorage",
-        "browser game", "client-side only", "client side only", "static site",
-        "no backend", "no server", "no persistent", "file-based", "no persistence"
-    ]
-    if any(signal in design_lower for signal in no_db_signals):
+    if not _is_db_required(design_doc):
         readme_path = _ROOT_DIR / "output" / "db" / "README.md"
         readme_path.parent.mkdir(parents=True, exist_ok=True)
         readme_path.write_text(
@@ -133,6 +152,10 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
         print("DB Engineer: No database needed for this project. Skipping SQL generation.")
         return {"migration_logs": "Skipped: No database required for this project type."}
 
+    from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+    import re
+    import json
+    
     prompt_path = _PROMPTS_DIR / "database_engineer.txt"
     prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
     
@@ -145,17 +168,76 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
         diff=state.schema_diff_notes or "None."
     )
     
-    formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"files\": [\n    {\"path\": \"output/db/init.sql\", \"content\": \"raw code\"}\n  ]\n}\n\nDo not use markdown wrappers unless wrapping the entire JSON block in ```json ... ```. Your output MUST parse successfully via json.loads()."
+    formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"files\": [\n    {\"path\": \"output/db/init.sql\", \"content\": \"raw code\"}\n  ]\n}\n\nNote: You have FULL terminal and file system access. You can call `run_terminal_command`, `semantic_code_search`, `read_file_range`, `replace_file_content`, `list_directory`, `fetch_server_logs`, `search_web`, and `rag_search` to inspect the workspace or look up documentation. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the CodeGenerationResponse schema. DO NOT output anything else after the JSON block."
     
-    # Use structured output only — bind_tools + with_structured_output conflict
-    structured_llm = _llm.with_structured_output(CodeGenerationResponse)
+    tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, create_project_database, run_migrations, validate_schema_diff]
+    llm_with_tools = _llm.bind_tools(tools_list)
     
+    messages = [
+        SystemMessage(content="You are a Principal Database Engineer. You write sql migrations."),
+        HumanMessage(content=formatted)
+    ]
+    
+    # ReAct Loop
+    while True:
+        try:
+            response = llm_with_tools.invoke(messages)
+        except Exception as e:
+            if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
+                import ast
+                error_str = str(e)
+                start_idx = error_str.find("'{")
+                end_idx = error_str.rfind("}'") + 2
+                if start_idx != -1 and end_idx != -1:
+                    if end_idx == -1 or end_idx <= start_idx:
+                        end_idx = error_str.rfind("'")
+                    try:
+                        raw_fg = error_str[start_idx:end_idx].replace("\\n", "\n").replace("\\'", "'")
+                        failed_gen = json.loads(raw_fg, strict=False)
+                        args = failed_gen.get("arguments", {})
+                        class DummyResponse:
+                            content = json.dumps(args) if isinstance(args, dict) else str(args)
+                            tool_calls = []
+                        response = DummyResponse()
+                    except Exception:
+                        raise e
+                else:
+                    raise e
+            else:
+                raise e
+                
+        messages.append(response)
+        
+        if not getattr(response, "tool_calls", []):
+            break
+            
+        tool_map = {tool.name: tool for tool in tools_list}
+        for tool_call in response.tool_calls:
+            name = tool_call["name"]
+            print(f"Agent calling tool: {name} with args {tool_call['args']}")
+            if name in tool_map:
+                result = tool_map[name].invoke(tool_call["args"])
+            else:
+                result = f"Error: Tool {name} not found."
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+
     try:
-        response = structured_llm.invoke(formatted)
+        content = response.content
+        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        if not json_match:
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+        if json_match:
+            parsed = json.loads(json_match.group(1) if '```' in content else json_match.group(0))
+        else:
+            parsed = json.loads(content)
+            
+        parsed_response = CodeGenerationResponse(**parsed)
+        
         output_dir = _ROOT_DIR / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        for f in response.files:
+        for f in parsed_response.files:
             clean_path = f.path.lstrip("/")
             if clean_path.startswith("output/"): clean_path = clean_path[7:]
             file_path = _ROOT_DIR / "output" / clean_path
@@ -164,7 +246,7 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
             print(f"DB Engineer wrote: {f.path}")
             
     except Exception as e:
-        print(f"DB Engineer structured output failed: {e}")
+        print(f"DB Engineer JSON parsing failed: {e}")
     
     return {"iteration_count": state.iteration_count + 1}
 
@@ -176,6 +258,10 @@ def execute_migrations_node(state: DatabaseEngineerState) -> dict:
     """
     Runs the migrations against the newly created database.
     """
+    if "Skipped:" in (state.migration_logs or ""):
+        print("DB Engineer: Skipping execution (no DB required).")
+        return {"migration_logs": state.migration_logs}
+        
     try:
         logs = run_migrations.invoke({"connection_string": state.db_connection_string, "tech_stack_hint": "sql"})
     except Exception as e:
@@ -191,6 +277,10 @@ def validate_schema_node(state: DatabaseEngineerState) -> dict:
     """
     Compares the physical database schema against the design document.
     """
+    if "Skipped:" in (state.migration_logs or ""):
+        print("DB Engineer: Skipping schema validation (no DB required).")
+        return {"db_schema_ready": True, "schema_diff_notes": "SCHEMA_MATCH (No DB required)"}
+
     try:
         diff_notes = validate_schema_diff.invoke({
             "connection_string": state.db_connection_string, 
@@ -199,7 +289,7 @@ def validate_schema_node(state: DatabaseEngineerState) -> dict:
     except Exception as e:
         diff_notes = str(e)
         
-    is_ready = diff_notes.strip() == "SCHEMA_MATCH"
+    is_ready = diff_notes.strip().startswith("SCHEMA_MATCH")
     return {"db_schema_ready": is_ready, "schema_diff_notes": diff_notes}
 
 # ---------------------------------------------------------------------------

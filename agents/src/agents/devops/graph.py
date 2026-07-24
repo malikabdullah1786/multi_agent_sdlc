@@ -97,10 +97,13 @@ workflow.add_conditional_edges(
 # Execution phase
 workflow.add_edge("execute_deployment", "push_to_github")
 workflow.add_edge("push_to_github", "verify_health")
-workflow.add_edge("verify_health", "mark_task_complete")
-workflow.add_edge("mark_task_complete", "pop_task")
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 
-devops_subgraph = workflow.compile(checkpointer=MemorySaver())
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+devops_subgraph = workflow.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     from langchain_core.runnables import RunnableConfig

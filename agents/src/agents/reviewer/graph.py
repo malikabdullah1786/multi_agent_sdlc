@@ -42,4 +42,10 @@ workflow.add_edge("review_code", "submit_review")
 workflow.add_edge("submit_review", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
-reviewer_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+reviewer_subgraph = workflow.compile(checkpointer=checkpointer)

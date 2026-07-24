@@ -3,7 +3,7 @@ Reviewer Agent — MCP and Internal Tools
 
 Tools for static analysis and GitHub Pull Request integration.
 """
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 import os
 import requests
 import subprocess

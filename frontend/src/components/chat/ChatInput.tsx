@@ -3,7 +3,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { Send } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
-import { createProject, respondToApproval } from '@/lib/api';
+import { createProject, respondToApproval, resumeProject } from '@/lib/api';
 import { connectRealWorkflow } from '@/lib/realWorkflow';
 
 export function ChatInput() {
@@ -29,12 +29,20 @@ export function ChatInput() {
       textareaRef.current.style.height = 'auto';
     }
 
+    const activeProjectId = typeof window !== 'undefined' ? localStorage.getItem('activeProjectId') : null;
+
     if (pendingApproval) {
       try {
         await respondToApproval(pendingApproval.id, trimmed);
         submitApproval(pendingApproval.id, true, trimmed);
       } catch (err) {
         console.error('Failed to send approval response:', err);
+      }
+    } else if (activeProjectId) {
+      try {
+        await resumeProject(activeProjectId);
+      } catch (err) {
+        console.error('Failed to resume active project:', err);
       }
     } else {
       try {

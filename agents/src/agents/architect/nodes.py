@@ -12,7 +12,8 @@ from langchain_core.prompts import PromptTemplate
 from agents.src.shared.llm import get_llm, llm_invoke_with_retry
 from langgraph.types import interrupt
 from agents.src.agents.architect.state import ArchitectState
-from agents.src.agents.architect.tools import rag_search, validate_schema, lint_api_spec
+from agents.src.agents.architect.tools import validate_schema, lint_api_spec
+from agents.src.shared.tools import rag_search
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
@@ -91,6 +92,7 @@ def design_draft_node(state: ArchitectState) -> dict:
         web_search_results=("\n\n".join(state.web_search_results) or "No web results.")[:2000],
         rag_results=("\n\n".join(state.rag_results) or "No past designs found.")[:2000],
         constraints="\n".join(f"- {c}" for c in state.constraints) or "None.",
+        previous_draft=(state.system_design_draft or "No previous draft.")[:6000],
         schema_feedback=state.schema_feedback or "No schema feedback.",
         api_feedback=state.api_feedback or "No API feedback.",
         structure_feedback=state.structure_feedback or "No structure feedback.",

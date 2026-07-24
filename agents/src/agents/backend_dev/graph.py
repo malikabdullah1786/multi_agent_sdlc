@@ -103,11 +103,15 @@ workflow.add_conditional_edges(
         "mark_task_complete": "mark_task_complete"
     }
 )
-
-# Loop back to get the next task
 workflow.add_edge("mark_task_complete", "pop_task")
 
-backend_dev_subgraph = workflow.compile(checkpointer=MemorySaver())
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
+
+backend_dev_subgraph = workflow.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
     from langchain_core.runnables import RunnableConfig

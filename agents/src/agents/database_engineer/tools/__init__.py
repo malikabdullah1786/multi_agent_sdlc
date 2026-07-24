@@ -7,7 +7,7 @@ be wired to a PostgreSQL MCP server and a local Filesystem MCP server.
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from langchain_core.tools import tool
+from agents.src.shared.tools import tool
 import os
 from pathlib import Path
 from agents.src.shared.llm import get_llm
