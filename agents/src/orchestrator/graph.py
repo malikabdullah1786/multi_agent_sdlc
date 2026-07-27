@@ -34,9 +34,13 @@ async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
         await checkpointer.setup()
         bound_subgraph = subgraph.builder.compile(checkpointer=checkpointer)
 
-        # First, if the subgraph hasn't started at all, run it with initial_input
+        # First, if the subgraph hasn't started at all, run it with initial_input.
+        # We check sub_state.values to distinguish between "never started" (no values)
+        # and "fully finished" (has values but no next nodes). A completed subgraph
+        # must NOT be re-invoked, or it restarts the entire graph from the beginning.
         sub_state = await bound_subgraph.aget_state(config)
-        if not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
+        already_has_state = bool(sub_state.values)
+        if not already_has_state and not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
             async for event in bound_subgraph.astream(initial_input, config=config):
                 for sub_node, _ in event.items():
                     if sub_node != "__interrupt__":
@@ -185,13 +189,32 @@ async def pm_phase_b_stage(state: WorkflowState) -> dict:
 # DISPATCHER LOOP & WRAPPERS
 # ===========================================================================
 
+# Safety counters to prevent infinite loops (keyed by workflow ID)
+_dispatcher_iteration_count: dict = {}
+_dispatcher_last_dispatch: dict = {}
+MAX_DISPATCHER_ITERATIONS = 50
+
 def dispatcher_stage(state: WorkflowState) -> dict:
     """
     Evaluates dependencies and priority, picks the next agent role to execute,
     and queues up their ready tasks.
     """
+    import time as _time
+    wf_id = state.workflowId
+
+    # ── Safety guard: max iteration count ──────────────────────────────────
+    _dispatcher_iteration_count.setdefault(wf_id, 0)
+    _dispatcher_iteration_count[wf_id] += 1
+    iteration = _dispatcher_iteration_count[wf_id]
+
+    if iteration > MAX_DISPATCHER_ITERATIONS:
+        print(f"[SAFETY][{_time.strftime('%H:%M:%S')}] Dispatcher exceeded {MAX_DISPATCHER_ITERATIONS} iterations for workflow {wf_id}. Forcing END.")
+        return {"active_role": "", "active_tasks": []}
+
     all_tasks = state.workflow_tasks
     completed = set(state.completed_task_titles)
+
+    print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] Iteration {iteration} | Total tasks: {len(all_tasks)} | Completed: {len(completed)}")
     
     # 1. Find all pending tasks whose dependencies are fully met
     ready_tasks = []
@@ -206,6 +229,7 @@ def dispatcher_stage(state: WorkflowState) -> dict:
             
     if not ready_tasks:
         # Either all tasks are done, or there's an unresolvable dependency cycle
+        print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] No ready tasks remaining. Ending workflow.")
         return {"active_role": "", "active_tasks": []}
         
     # 2. Tie-breaker precedence
@@ -221,6 +245,15 @@ def dispatcher_stage(state: WorkflowState) -> dict:
     
     # 5. Gather ALL ready tasks for that chosen role
     tasks_for_role = [t for t in ready_tasks if t.get("assignee_role", "") == chosen_role]
+
+    # ── Safety guard: detect identical re-dispatch (same role + same tasks) ─
+    dispatch_key = f"{chosen_role}::{'|'.join(sorted(t.get('title', '') for t in tasks_for_role))}"
+    if _dispatcher_last_dispatch.get(wf_id) == dispatch_key:
+        print(f"[SAFETY][{_time.strftime('%H:%M:%S')}] Dispatcher would re-dispatch identical work: {dispatch_key}. Forcing END to break loop.")
+        return {"active_role": "", "active_tasks": []}
+    _dispatcher_last_dispatch[wf_id] = dispatch_key
+
+    print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] Dispatching role='{chosen_role}' with {len(tasks_for_role)} task(s): {[t.get('title','') for t in tasks_for_role]}")
     
     return {"active_role": chosen_role, "active_tasks": tasks_for_role}
 
@@ -252,7 +285,24 @@ def _dispatcher_router(state: WorkflowState) -> str:
 # ---------------------------------------------------------------------------
 # AGENT WRAPPER STAGES
 # ---------------------------------------------------------------------------
+
+# Counter to generate unique thread IDs for each subgraph invocation
+_subgraph_batch_counter: dict = {}
+
 async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str) -> dict:
+    import hashlib
+    import time as _time
+
+    # ── Generate a UNIQUE thread_id per task batch ─────────────────────────
+    # This prevents checkpoint collision: each batch of tasks gets a fresh
+    # checkpoint so the subgraph actually processes new work instead of
+    # returning stale results from a previous run.
+    task_titles = sorted(t.get("title", "") for t in state.active_tasks)
+    batch_hash = hashlib.md5("::".join(task_titles).encode()).hexdigest()[:8]
+    unique_thread_id = f"{state.workflowId}-{role_name}-{batch_hash}"
+
+    print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] Executing {role_name} with thread_id='{unique_thread_id}' for tasks: {task_titles}")
+
     # Send only active_tasks to the sub-agent
     out = await _run_subgraph_with_interrupts(
         subgraph,
@@ -265,7 +315,7 @@ async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str
             "active_pr_number": state.active_pr_number,
             "github_repo_name": state.github_repo_name
         },
-        {"configurable": {"thread_id": f"{state.workflowId}-{role_name}"}}
+        {"configurable": {"thread_id": unique_thread_id}}
     )
     
     new_completed = state.completed_task_titles.copy()
@@ -285,11 +335,17 @@ async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str
     if not is_rejected:
         # Mark tasks as completed
         for t in state.active_tasks:
-            new_completed.append(t.get("title", ""))
+            title = t.get("title", "")
+            if title not in new_completed:  # Prevent duplicate entries
+                new_completed.append(title)
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} APPROVED. Completed: {[t.get('title','') for t in state.active_tasks]}")
+    else:
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} REJECTED. Tasks NOT marked complete.")
             
     # Pull any newly spawned tasks (e.g., bug fixes, PR revisions)
     if "new_workflow_tasks" in out and out["new_workflow_tasks"]:
         new_global_tasks.extend(out["new_workflow_tasks"])
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} spawned {len(out['new_workflow_tasks'])} new task(s).")
         
     # Capture PR number if Developer agents created one
     if "active_pr_number" in out and out["active_pr_number"]:

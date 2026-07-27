@@ -41,8 +41,25 @@ export function ChatInput() {
     } else if (activeProjectId) {
       try {
         await resumeProject(activeProjectId);
-      } catch (err) {
-        console.error('Failed to resume active project:', err);
+      } catch (err: any) {
+        if (err.message && err.message.includes('409')) {
+          console.warn('Caught 409: Auto-resolving missing pending approval state...');
+          try {
+            const { getProjectApprovals } = await import('@/lib/api');
+            const approvals = await getProjectApprovals(activeProjectId);
+            const pending = approvals.find((a: any) => a.status === 'PENDING');
+            if (pending) {
+              await respondToApproval(String(pending.id), trimmed);
+              submitApproval(String(pending.id), true, trimmed);
+            } else {
+              console.error('No pending approval found despite 409 error');
+            }
+          } catch (fallbackErr) {
+            console.error('Failed to fallback resolve approval:', fallbackErr);
+          }
+        } else {
+          console.warn('Could not resume project:', err.message || err);
+        }
       }
     } else {
       try {

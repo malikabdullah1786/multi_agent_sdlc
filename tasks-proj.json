@@ -1,0 +1,174 @@
+[
+    {
+        "title": "Setup Local Storage",
+        "description": "Implement AsyncStorage wrappers for scores and levels.",
+        "assignee_role": "database_engineer",
+        "priority": 1,
+        "dependencies": []
+    },
+    {
+        "title": "Build Physics Engine",
+        "description": "Implement collision detection and reflection vectors.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup Local Storage"
+        ]
+    },
+    {
+        "title": "Implement Grid Manager",
+        "description": "Create hexagonal coordinate system and snap-to-grid logic.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup Local Storage"
+        ]
+    },
+    {
+        "title": "Develop Match Logic",
+        "description": "Implement recursive flood-fill for bubble popping.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Implement Grid Manager"
+        ]
+    },
+    {
+        "title": "Create Level Generator",
+        "description": "Logic for bubble density and color palettes.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Develop Match Logic"
+        ]
+    },
+    {
+        "title": "Setup Zustand Store",
+        "description": "Manage game state, score, and level progress.",
+        "assignee_role": "backend",
+        "priority": 2,
+        "dependencies": [
+            "Setup Local Storage"
+        ]
+    },
+    {
+        "title": "Build Game Canvas",
+        "description": "Implement Skia Canvas for high-performance rendering.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build Physics Engine",
+            "Setup Zustand Store"
+        ]
+    },
+    {
+        "title": "Create Bubble Launcher",
+        "description": "Build rotational launcher with gesture handling.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build Game Canvas"
+        ]
+    },
+    {
+        "title": "Implement Aiming Line",
+        "description": "Add dynamic vector line using Reanimated.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Create Bubble Launcher"
+        ]
+    },
+    {
+        "title": "Build HUD UI",
+        "description": "Create score and level display components.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Setup Zustand Store"
+        ]
+    },
+    {
+        "title": "Develop Main Menu",
+        "description": "Build start screen and navigation to game.",
+        "assignee_role": "frontend",
+        "priority": 3,
+        "dependencies": [
+            "Build HUD UI"
+        ]
+    },
+    {
+        "title": "Test Core Gameplay",
+        "description": "Verify shooting, popping, and collision logic.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Build Game Canvas",
+            "Develop Match Logic"
+        ]
+    },
+    {
+        "title": "Test Level Progression",
+        "description": "Verify difficulty scaling and storage persistence.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Create Level Generator",
+            "Develop Main Menu"
+        ]
+    },
+    {
+        "title": "Verify Performance",
+        "description": "Ensure 60fps and <16ms input latency.",
+        "assignee_role": "qa",
+        "priority": 4,
+        "dependencies": [
+            "Test Core Gameplay"
+        ]
+    },
+    {
+        "title": "Code Review Logic",
+        "description": "Review physics and match logic for efficiency.",
+        "assignee_role": "reviewer",
+        "priority": 5,
+        "dependencies": [
+            "Test Core Gameplay"
+        ]
+    },
+    {
+        "title": "Review UI/UX",
+        "description": "Review responsiveness and layout across Android devices.",
+        "assignee_role": "reviewer",
+        "priority": 5,
+        "dependencies": [
+            "Test Level Progression"
+        ]
+    },
+    {
+        "title": "Security Audit",
+        "description": "Check local storage safety and memory leaks.",
+        "assignee_role": "security",
+        "priority": 6,
+        "dependencies": [
+            "Code Review Logic"
+        ]
+    },
+    {
+        "title": "Configure Android Build",
+        "description": "Setup Gradle and ProGuard for APK optimization.",
+        "assignee_role": "devops",
+        "priority": 7,
+        "dependencies": [
+            "Security Audit"
+        ]
+    },
+    {
+        "title": "Generate Final APK",
+        "description": "Build signed release APK for installation.",
+        "assignee_role": "devops",
+        "priority": 7,
+        "dependencies": [
+            "Configure Android Build"
+        ]
+    }
+]

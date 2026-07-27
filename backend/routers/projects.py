@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from backend.database import get_db
-from backend.models import Project, Workflow
+from backend.models import Project, Workflow, HumanApproval
 from backend.schemas import ProjectCreate, ProjectResponse
 from backend.orchestrator_service import OrchestratorService
 
@@ -83,10 +83,32 @@ async def resume_project_pipeline(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
-    """Resume the multi-agent pipeline for an existing project."""
+    """Resume the multi-agent pipeline for an existing project.
+    
+    Returns 409 Conflict if the pipeline has a pending human approval —
+    in that case the frontend must submit via POST /approvals/{id}/respond instead.
+    """
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Guard: if a PENDING approval exists, reject the blind resume so we don't
+    # corrupt LangGraph's interrupt checkpoint with a null-feedback Command.
+    stmt = (
+        select(HumanApproval)
+        .join(Workflow, HumanApproval.workflow_id == Workflow.id)
+        .where(
+            Workflow.project_id == project_id,
+            HumanApproval.status == "PENDING"
+        )
+    )
+    res = await db.execute(stmt)
+    pending_approval = res.scalars().first()
+    if pending_approval:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pipeline has a pending approval (id={pending_approval.id}). Submit via POST /approvals/{pending_approval.id}/respond."
+        )
 
     thread_id = str(project.id)
     background_tasks.add_task(
@@ -96,3 +118,4 @@ async def resume_project_pipeline(
         project.description or "Resume pipeline"
     )
     return project
+

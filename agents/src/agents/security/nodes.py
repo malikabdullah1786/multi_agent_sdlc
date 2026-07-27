@@ -6,7 +6,7 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
@@ -95,6 +95,10 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
         """
     )
     
+    import os
+    if os.name == 'nt':
+        prompt.template += "\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p` or `rm -rf`. Use `mkdir` without `-p`."
+        
     formatted = prompt.format(
         sast=state.sast_scan_results,
         deps=state.dependency_vulnerabilities
@@ -109,9 +113,9 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
     ]
     
     # ReAct Loop
-    while True:
+    for turn in range(15):
         try:
-            response = llm_with_tools.invoke(messages)
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Security")
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -141,6 +145,10 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
         if not getattr(response, "tool_calls", []):
             break
             
+        # Check if it accidentally provided the JSON block alongside tool calls
+        if response.content and "```json" in response.content:
+            break
+            
         tool_map = {tool.name: tool for tool in tools_list}
         for tool_call in response.tool_calls:
             name = tool_call["name"]
@@ -152,8 +160,16 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
     
     try:
-        content = response.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        # Find the content containing the JSON
+        content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and "```json" in msg.content:
+                content = msg.content
+                break
+        if not content:
+            content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if not json_match:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             
@@ -222,8 +238,8 @@ def enforce_security_gate_node(state: SecurityState) -> dict:
             # Spawn a new task for the orchestrator
             new_tasks.append({
                 "id": f"task-sec-{int(time.time())}",
-                "title": f"Fix Security Vulnerability: {v_title}",
-                "description": f"Security scan found a {v_sev} vulnerability.\n\nMitigation:\n{v_mit}",
+                "title": f"Address Security Vulnerabilities (Attempt {int(time.time())})",
+                "description": f"The Security Agent found issues.\n\nIssues:\n{state.security_comments}\n\nMitigation:\n{v_mit}",
                 "assignee_role": "backend", # Usually backend handles sec fixes
                 "dependencies": [],
                 "priority": 1 # Security fixes are top priority

@@ -6,7 +6,7 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
 
@@ -54,11 +54,13 @@ def _get_code_under_review() -> str:
         
     code_blocks = []
     omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css"}
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"}
     ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
     
-    # Establish a maximum character budget for the entire code snippet (~15k tokens)
-    MAX_TOTAL_CHARS = 60000
+    # Establish a maximum character budget for the entire code snippet
+    import os
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    MAX_TOTAL_CHARS = 12000 if provider == "groq" else 60000
     current_total_chars = 0
     
     for path in sorted(output_dir.rglob("*")):
@@ -134,6 +136,10 @@ def review_code_node(state: ReviewerState) -> dict:
         """
     )
     
+    import os
+    if os.name == 'nt':
+        prompt.template += "\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p` or `rm -rf`. Use `mkdir` without `-p`."
+        
     formatted = prompt.format(report=state.complexity_report, code=code_content)
     
     tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, run_complexity_analysis, leave_pr_comment, merge_pull_request]
@@ -145,9 +151,9 @@ def review_code_node(state: ReviewerState) -> dict:
     ]
     
     # ReAct Loop
-    while True:
+    for turn in range(15):
         try:
-            response = llm_with_tools.invoke(messages)
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Reviewer")
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -177,6 +183,10 @@ def review_code_node(state: ReviewerState) -> dict:
         if not getattr(response, "tool_calls", []):
             break
             
+        # Check if it accidentally provided the JSON block alongside tool calls
+        if response.content and "```json" in response.content:
+            break
+            
         tool_map = {tool.name: tool for tool in tools_list}
         for tool_call in response.tool_calls:
             name = tool_call["name"]
@@ -188,8 +198,16 @@ def review_code_node(state: ReviewerState) -> dict:
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
 
     try:
-        content = response.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        # Find the content containing the JSON
+        content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and "```json" in msg.content:
+                content = msg.content
+                break
+        if not content:
+            content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if not json_match:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             
@@ -251,7 +269,7 @@ def submit_review_node(state: ReviewerState) -> dict:
             
         new_tasks.append({
             "id": f"task-review-{int(time.time())}",
-            "title": f"Address Code Review Feedback for PR #{pr_num}",
+            "title": f"Address Code Review Feedback for PR #{pr_num} (Attempt {int(time.time())})",
             "description": f"The Reviewer Agent requested changes on your PR.\n\nFeedback:\n{comments}",
             "assignee_role": assignee_role, 
             "dependencies": [],

@@ -6,7 +6,7 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field, AliasChoices
 from typing import Dict, Any, List
@@ -59,10 +59,12 @@ def _get_codebase_summary() -> str:
         
     code_blocks = []
     omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"}
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"}
     ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
     
-    MAX_TOTAL_CHARS = 40000
+    import os
+    provider = os.getenv("LLM_PROVIDER", "").lower()
+    MAX_TOTAL_CHARS = 16000 if provider == "ollama" else 40000
     current_total_chars = 0
     
     for path in sorted(output_dir.rglob("*")):
@@ -121,6 +123,10 @@ def generate_tests_node(state: QAState) -> dict:
         """
     )
     
+    import os
+    if os.name == 'nt':
+        prompt.template += "\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p` or `rm -rf`. Use `mkdir` without `-p`."
+        
     existing_code = _get_codebase_summary()
     
     formatted = prompt.format(
@@ -138,9 +144,9 @@ def generate_tests_node(state: QAState) -> dict:
     ]
     
     # ReAct Loop
-    while True:
+    for turn in range(15):
         try:
-            response = llm_with_tools.invoke(messages)
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="QA")
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -163,11 +169,16 @@ def generate_tests_node(state: QAState) -> dict:
                 else:
                     raise e
             else:
-                raise e
+                print(f"[QA Agent] LLM generation failed with error: {e}. Proceeding to fallback test suite.")
+                break
                 
         messages.append(response)
         
         if not getattr(response, "tool_calls", []):
+            break
+            
+        # Check if it accidentally provided the TS block alongside tool calls
+        if response.content and "```typescript" in response.content.lower():
             break
             
         tool_map = {tool.name: tool for tool in tools_list}
@@ -180,7 +191,15 @@ def generate_tests_node(state: QAState) -> dict:
                 result = f"Error: Tool {name} not found."
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
     
-    content = response.content
+    # Find the content containing the typescript block
+    content = ""
+    for msg in reversed(messages):
+        if hasattr(msg, "content") and isinstance(msg.content, str) and ("```typescript" in msg.content.lower() or "```ts" in msg.content.lower()):
+            content = msg.content
+            break
+    if not content:
+        content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+        
     match = re.search(r'```(?:typescript|ts)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
     if match:
         test_code = match.group(1).strip()
@@ -313,7 +332,7 @@ def analyze_failures_node(state: QAState) -> dict:
         # 2. Spawn task for Dispatcher
         new_tasks.append({
             "id": f"task-bugfix-{int(time.time())}",
-            "title": f"Fix QA Bug: {bug.title}",
+            "title": f"Fix QA Bug: {bug.title} (Attempt {int(time.time())})",
             "description": f"A bug was discovered during QA testing.\n\nSteps:\n{bug.steps}\n\nExpected:\n{bug.expected}\n\nActual:\n{bug.actual}",
             "assignee_role": _route_bug(bug),
             "dependencies": [],

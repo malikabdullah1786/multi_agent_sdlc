@@ -10,7 +10,7 @@ import os
 import re
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -107,7 +107,7 @@ def _get_codebase_summary() -> str:
         return "No generated database scripts found yet."
         
     code_blocks = []
-    allowed_extensions = {".sql"}
+    allowed_extensions = {".sql", ".prisma", ".json", ".md"}
     
     for path in sorted(output_dir.rglob("*")):
         if path.is_file():
@@ -170,6 +170,10 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     
     formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"files\": [\n    {\"path\": \"output/db/init.sql\", \"content\": \"raw code\"}\n  ]\n}\n\nNote: You have FULL terminal and file system access. You can call `run_terminal_command`, `semantic_code_search`, `read_file_range`, `replace_file_content`, `list_directory`, `fetch_server_logs`, `search_web`, and `rag_search` to inspect the workspace or look up documentation. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the CodeGenerationResponse schema. DO NOT output anything else after the JSON block."
     
+    import os
+    if os.name == 'nt':
+        formatted += "\n\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p`, `rm -rf`, or `touch`. Use Windows equivalents (e.g., `mkdir` without `-p` to create directories, `del /s /q` or `rmdir /s /q` for deletion). `mkdir` automatically creates intermediate directories in cmd."
+        
     tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, create_project_database, run_migrations, validate_schema_diff]
     llm_with_tools = _llm.bind_tools(tools_list)
     
@@ -179,9 +183,10 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     ]
     
     # ReAct Loop
-    while True:
+    turn_limit = 15
+    for turn in range(turn_limit):
         try:
-            response = llm_with_tools.invoke(messages)
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Database Engineer")
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -211,6 +216,10 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
         if not getattr(response, "tool_calls", []):
             break
             
+        # Check if it accidentally provided the JSON block alongside tool calls
+        if response.content and "```json" in response.content:
+            break
+            
         tool_map = {tool.name: tool for tool in tools_list}
         for tool_call in response.tool_calls:
             name = tool_call["name"]
@@ -222,8 +231,16 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
 
     try:
-        content = response.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        # Find the content containing the JSON
+        content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and "```json" in msg.content:
+                content = msg.content
+                break
+        if not content:
+            content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if not json_match:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             

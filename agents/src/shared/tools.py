@@ -49,6 +49,14 @@ def run_terminal_command(command: str) -> str:
     # Non-blocking non-interactive auto-fix for npm install
     if command.startswith("npm install") and "--legacy-peer-deps" not in command:
         command += " --legacy-peer-deps"
+    
+    # Auto-fix Windows cmd.exe incompatible commands
+    import os
+    if os.name == 'nt':
+        if command.strip().startswith("mkdir -p "):
+            command = command.replace("mkdir -p ", "mkdir ")
+        elif command.strip().startswith("rm -rf "):
+            command = command.replace("rm -rf ", "rmdir /s /q ")
         
     try:
         res = subprocess.run(

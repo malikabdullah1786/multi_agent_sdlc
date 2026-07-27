@@ -32,7 +32,7 @@ from agents.src.shared.tools import (
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from pydantic import BaseModel, Field
 from typing import List
 import subprocess
@@ -62,7 +62,7 @@ def _get_codebase_summary() -> str:
         
     code_blocks = []
     omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"}
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html", ".yml", ".yaml", ".toml"}
     ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
     
     MAX_TOTAL_CHARS = 40000
@@ -122,6 +122,10 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
     
     formatted += "\n\nNote: You have FULL terminal and file system access. You can call `run_terminal_command`, `semantic_code_search`, `read_file_range`, `replace_file_content`, `list_directory`, `fetch_server_logs`, `search_web`, and `rag_search` to inspect the workspace or look up documentation. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the CodeGenerationResponse schema. DO NOT output anything else after the JSON block."
     
+    import os
+    if os.name == 'nt':
+        formatted += "\n\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p`, `rm -rf`, or `touch`. Use Windows equivalents (e.g., `mkdir` without `-p` to create directories, `del /s /q` or `rmdir /s /q` for deletion). `mkdir` automatically creates intermediate directories in cmd."
+        
     tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, validate_iac_config, run_deployment, health_check_ping, push_github_actions]
     llm_with_tools = _llm.bind_tools(tools_list)
     
@@ -131,9 +135,10 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
     ]
     
     # ReAct Loop
-    while True:
+    turn_limit = 15
+    for turn in range(turn_limit):
         try:
-            response = llm_with_tools.invoke(messages)
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="DevOps")
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -163,6 +168,10 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
         if not getattr(response, "tool_calls", []):
             break
             
+        # Check if it accidentally provided the JSON block alongside tool calls
+        if response.content and ("```json" in response.content or "terminal_commands" in response.content):
+            break
+            
         tool_map = {tool.name: tool for tool in tools_list}
         for tool_call in response.tool_calls:
             name = tool_call["name"]
@@ -177,8 +186,16 @@ def generate_deployment_plan_node(state: DevOpsState) -> dict:
     deployment_cmds = []
     
     try:
-        content = response.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        # Find the content containing the JSON
+        content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and ("```json" in msg.content or "terminal_commands" in msg.content):
+                content = msg.content
+                break
+        if not content:
+            content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if not json_match:
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             
@@ -293,6 +310,13 @@ def execute_deployment_node(state: DevOpsState) -> dict:
                 "npm run dev", "npm run start", "npm start", "node server", 
                 "python manage.py runserver", "flask run", "uvicorn", "npx next dev", "pm2", "bash start.sh", "start.sh", "docker compose up"
             ]
+            
+            # Auto-fix Windows cmd.exe incompatible commands
+            if os.name == 'nt':
+                if cmd.strip().startswith("mkdir -p "):
+                    cmd = cmd.replace("mkdir -p ", "mkdir ")
+                elif cmd.strip().startswith("rm -rf "):
+                    cmd = cmd.replace("rm -rf ", "rmdir /s /q ")
             
             if any(cmd.strip().startswith(prefix) for prefix in DAEMON_SERVER_PREFIXES) and "-d" not in cmd:
                 # Background the script if it's a daemon and doesn't already have detached flag

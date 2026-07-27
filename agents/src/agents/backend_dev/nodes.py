@@ -7,7 +7,7 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from dotenv import load_dotenv
 import json
@@ -83,7 +83,7 @@ def _get_codebase_summary() -> str:
         
     code_blocks = []
     omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css"}
+    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"}
     ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
     
     MAX_TOTAL_CHARS = 50000
@@ -156,8 +156,9 @@ def write_code_node(state: BackendDevState) -> dict:
     # Inform the agent it can execute terminal commands, read chunks or search existing code
     formatted += "\n\nNote: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command in the project directory, call `semantic_code_search` to locate code patterns, call `read_file_range` to view files, call `db_schema_inspector` to view schema, or call `search_web` to look up docs. You can use `list_directory` to explore file paths, and `fetch_server_logs` to debug server crashes. Gather whatever context you need first. Once ready, output your final file generation response."
     formatted += "\n\nCRITICAL RULE: DO NOT use tool calling for your final JSON output. You MUST output your final JSON directly in your message text response, surrounded by ```json ... ```. If you wrap your final JSON in a tool call (like 'json' or 'CodeGenerationResponse'), it will crash the system."
-    formatted += "\n\nBUG FIXING RULE: If you are fixing a small bug, you DO NOT need to output the whole file in the final JSON. Instead, you MUST use the `replace_file_content` tool to surgically fix the file, and then output an empty `files: []` array in your final JSON. Use the full JSON file overwrite ONLY for brand new files or massive rewrites."
-    
+    if os.name == 'nt':
+        formatted += "\n\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p`, `rm -rf`, or `touch`. Use Windows equivalents (e.g., `mkdir` without `-p` to create directories, `del /s /q` or `rmdir /s /q` for deletion). `mkdir` automatically creates intermediate directories in cmd."
+        
     messages = [
         SystemMessage(content=formatted),
         HumanMessage(content="Start your implementation. You can execute shell commands with `run_terminal_command`, search the codebase with `semantic_code_search`, read files with `read_file_range`, edit files with `replace_file_content`, list directories with `list_directory`, and fetch server logs with `fetch_server_logs`. When done, output the final code JSON as plain text.")
@@ -166,10 +167,10 @@ def write_code_node(state: BackendDevState) -> dict:
     generated_code_dump = []
     
     try:
-        # Loop for up to 4 turns of tool execution
-        for turn in range(4):
+        # Loop for up to 15 turns of tool execution
+        for turn in range(15):
             try:
-                response = llm_with_tools.invoke(messages)
+                response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Backend Dev")
             except Exception as invoke_e:
                 error_str = str(invoke_e)
                 # Catch Groq tool_use_failed exceptions where it puts the payload in failed_generation
@@ -200,7 +201,12 @@ def write_code_node(state: BackendDevState) -> dict:
             
             messages.append(response)
             
-            if not response.tool_calls:
+            # If the LLM returned no tool calls, it must be the final JSON response
+            if not getattr(response, "tool_calls", None):
+                break
+                
+            # Check if it accidentally provided the JSON block alongside tool calls
+            if response.content and "```json" in response.content:
                 break
                 
             # Process tool calls
@@ -214,7 +220,14 @@ def write_code_node(state: BackendDevState) -> dict:
                 else:
                     print(f"Backend Dev called unknown tool: {tool_name}")
                     
-        final_content = messages[-1].content
+        # Find the content containing the JSON
+        final_content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and isinstance(msg.content, str) and ("```json" in msg.content or "terminal_commands" in msg.content):
+                final_content = msg.content
+                break
+        if not final_content:
+            final_content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
         
         # Now parse final_content as the code JSON response
         output_dir = _ROOT_DIR / "output"
@@ -232,7 +245,20 @@ def write_code_node(state: BackendDevState) -> dict:
             else:
                 content = final_content
                 
-        data = json.loads(content, strict=False)
+        def _parse_json_robust(text: str) -> dict:
+            try:
+                return json.loads(text, strict=False)
+            except Exception:
+                pass
+            cleaned = re.sub(r',\s*([}\]])', r'\1', text)
+            try:
+                return json.loads(cleaned, strict=False)
+            except Exception:
+                pass
+            cleaned_ctrl = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+            return json.loads(cleaned_ctrl, strict=False)
+
+        data = _parse_json_robust(content)
         
         # Execute terminal commands
         for cmd in data.get("terminal_commands", []):
@@ -249,6 +275,13 @@ def write_code_node(state: BackendDevState) -> dict:
             
             if cmd.startswith("npm install") and "--legacy-peer-deps" not in cmd:
                 cmd += " --legacy-peer-deps"
+            
+            # Auto-fix Windows cmd.exe incompatible commands
+            if os.name == 'nt':
+                if cmd.strip().startswith("mkdir -p "):
+                    cmd = cmd.replace("mkdir -p ", "mkdir ")
+                elif cmd.strip().startswith("rm -rf "):
+                    cmd = cmd.replace("rm -rf ", "rmdir /s /q ")
             
             print(f"Backend Dev executing: {cmd}")
             try:
