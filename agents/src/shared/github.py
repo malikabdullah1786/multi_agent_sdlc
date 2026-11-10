@@ -298,7 +298,7 @@ blob-report/
     git_commands = [
         "git init",
         'git config user.email "[EMAIL_ADDRESS]"',
-        'git config user.name "Hamza Abbas"',
+        'git config user.name "Malik Abdullah"',
         # Switch to main and make an empty base commit just in case it's a new repo
         "git checkout -b main",
         f'git commit --allow-empty -m "{initial_msg}"',

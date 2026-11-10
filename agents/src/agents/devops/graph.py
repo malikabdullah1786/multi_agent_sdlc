@@ -117,7 +117,7 @@ if __name__ == "__main__":
         "workflow_tasks": [{"id": 1, "title": "Setup Docker and CI/CD"}],
         "current_task": None,
         "iteration_count": 0,
-        "github_repo_name": "hamza_sdlc_auto"
+        "github_repo_name": "multi_agent_sdlc_auto"
     }
     
     config: RunnableConfig = {"configurable": {"thread_id": str(uuid.uuid4())}}
