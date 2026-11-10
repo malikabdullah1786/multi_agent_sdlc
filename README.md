@@ -78,7 +78,7 @@
 ## Project Structure
 
 ```
-hamza_sdlc/
+multi_agent_sdlc/
 ├── 📁 agents/                         # Core AI Agent Engine (Python)
 │   ├── 📁 src/
 │   │   ├── 📁 agents/                 # All specialized agent subgraphs
