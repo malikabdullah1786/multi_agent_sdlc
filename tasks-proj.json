@@ -1,174 +1,225 @@
 [
     {
-        "title": "Setup Local Storage",
-        "description": "Implement AsyncStorage wrappers for scores and levels.",
+        "title": "Create Users Table",
+        "description": "Define users schema with indexes.",
         "assignee_role": "database_engineer",
         "priority": 1,
         "dependencies": []
     },
     {
-        "title": "Build Physics Engine",
-        "description": "Implement collision detection and reflection vectors.",
+        "title": "Create Todos Table",
+        "description": "Define todos schema with required fields.",
+        "assignee_role": "database_engineer",
+        "priority": 1,
+        "dependencies": []
+    },
+    {
+        "title": "Create RefreshTokens Table",
+        "description": "Define refresh token storage schema.",
+        "assignee_role": "database_engineer",
+        "priority": 1,
+        "dependencies": []
+    },
+    {
+        "title": "Implement Auth API",
+        "description": "Create signup, login, refresh, logout endpoints.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Setup Local Storage"
+            "Create Users Table",
+            "Create Todos Table",
+            "Create RefreshTokens Table"
         ]
     },
     {
-        "title": "Implement Grid Manager",
-        "description": "Create hexagonal coordinate system and snap-to-grid logic.",
+        "title": "Implement Todos API",
+        "description": "Create CRUD endpoints with JWT protection.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Setup Local Storage"
+            "Create Users Table",
+            "Create Todos Table",
+            "Create RefreshTokens Table"
         ]
     },
     {
-        "title": "Develop Match Logic",
-        "description": "Implement recursive flood-fill for bubble popping.",
+        "title": "Add RateLimit Middleware",
+        "description": "Integrate Redis token bucket for rate limiting.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Implement Grid Manager"
+            "Create Users Table",
+            "Create Todos Table",
+            "Create RefreshTokens Table"
         ]
     },
     {
-        "title": "Create Level Generator",
-        "description": "Logic for bubble density and color palettes.",
+        "title": "Setup Prisma Models",
+        "description": "Map DB schema to Prisma for ORM.",
         "assignee_role": "backend",
         "priority": 2,
         "dependencies": [
-            "Develop Match Logic"
+            "Create Users Table",
+            "Create Todos Table",
+            "Create RefreshTokens Table"
         ]
     },
     {
-        "title": "Setup Zustand Store",
-        "description": "Manage game state, score, and level progress.",
-        "assignee_role": "backend",
-        "priority": 2,
-        "dependencies": [
-            "Setup Local Storage"
-        ]
-    },
-    {
-        "title": "Build Game Canvas",
-        "description": "Implement Skia Canvas for high-performance rendering.",
+        "title": "Build Home Screen",
+        "description": "Display task list and filter tabs.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Build Physics Engine",
-            "Setup Zustand Store"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models"
         ]
     },
     {
-        "title": "Create Bubble Launcher",
-        "description": "Build rotational launcher with gesture handling.",
+        "title": "Build Task Modal",
+        "description": "Add/edit task UI with validation.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Build Game Canvas"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models"
         ]
     },
     {
-        "title": "Implement Aiming Line",
-        "description": "Add dynamic vector line using Reanimated.",
+        "title": "Build Auth Flow",
+        "description": "Signup/login pages with JWT handling.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Create Bubble Launcher"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models"
         ]
     },
     {
-        "title": "Build HUD UI",
-        "description": "Create score and level display components.",
+        "title": "Add UI Validation",
+        "description": "Client-side checks for title length.",
         "assignee_role": "frontend",
         "priority": 3,
         "dependencies": [
-            "Setup Zustand Store"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models"
         ]
     },
     {
-        "title": "Develop Main Menu",
-        "description": "Build start screen and navigation to game.",
-        "assignee_role": "frontend",
-        "priority": 3,
-        "dependencies": [
-            "Build HUD UI"
-        ]
-    },
-    {
-        "title": "Test Core Gameplay",
-        "description": "Verify shooting, popping, and collision logic.",
+        "title": "Test Auth Endpoints",
+        "description": "Verify signup, login, token refresh, logout.",
         "assignee_role": "qa",
         "priority": 4,
         "dependencies": [
-            "Build Game Canvas",
-            "Develop Match Logic"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models",
+            "Build Home Screen",
+            "Build Task Modal",
+            "Build Auth Flow",
+            "Add UI Validation"
         ]
     },
     {
-        "title": "Test Level Progression",
-        "description": "Verify difficulty scaling and storage persistence.",
+        "title": "Test Todo CRUD",
+        "description": "Validate create, read, update, delete operations.",
         "assignee_role": "qa",
         "priority": 4,
         "dependencies": [
-            "Create Level Generator",
-            "Develop Main Menu"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models",
+            "Build Home Screen",
+            "Build Task Modal",
+            "Build Auth Flow",
+            "Add UI Validation"
         ]
     },
     {
-        "title": "Verify Performance",
-        "description": "Ensure 60fps and <16ms input latency.",
+        "title": "Test UI Filters",
+        "description": "Ensure filter tabs show correct tasks.",
         "assignee_role": "qa",
         "priority": 4,
         "dependencies": [
-            "Test Core Gameplay"
+            "Implement Auth API",
+            "Implement Todos API",
+            "Add RateLimit Middleware",
+            "Setup Prisma Models",
+            "Build Home Screen",
+            "Build Task Modal",
+            "Build Auth Flow",
+            "Add UI Validation"
         ]
     },
     {
-        "title": "Code Review Logic",
-        "description": "Review physics and match logic for efficiency.",
+        "title": "Code Review Backend",
+        "description": "Review backend code quality and standards.",
         "assignee_role": "reviewer",
         "priority": 5,
         "dependencies": [
-            "Test Core Gameplay"
+            "Test Auth Endpoints",
+            "Test Todo CRUD",
+            "Test UI Filters"
         ]
     },
     {
-        "title": "Review UI/UX",
-        "description": "Review responsiveness and layout across Android devices.",
+        "title": "Code Review Frontend",
+        "description": "Review frontend components and logic.",
         "assignee_role": "reviewer",
         "priority": 5,
         "dependencies": [
-            "Test Level Progression"
+            "Test Auth Endpoints",
+            "Test Todo CRUD",
+            "Test UI Filters"
         ]
     },
     {
-        "title": "Security Audit",
-        "description": "Check local storage safety and memory leaks.",
+        "title": "Security Scan",
+        "description": "Run static analysis and dependency checks.",
         "assignee_role": "security",
         "priority": 6,
         "dependencies": [
-            "Code Review Logic"
+            "Code Review Backend",
+            "Code Review Frontend"
         ]
     },
     {
-        "title": "Configure Android Build",
-        "description": "Setup Gradle and ProGuard for APK optimization.",
-        "assignee_role": "devops",
-        "priority": 7,
+        "title": "Pen Test Auth",
+        "description": "Perform penetration tests on auth flow.",
+        "assignee_role": "security",
+        "priority": 6,
         "dependencies": [
-            "Security Audit"
+            "Code Review Backend",
+            "Code Review Frontend"
         ]
     },
     {
-        "title": "Generate Final APK",
-        "description": "Build signed release APK for installation.",
+        "title": "Setup CI Pipeline",
+        "description": "Configure GitHub Actions for build and test.",
         "assignee_role": "devops",
         "priority": 7,
         "dependencies": [
-            "Configure Android Build"
+            "Security Scan",
+            "Pen Test Auth"
+        ]
+    },
+    {
+        "title": "Deploy to K8s",
+        "description": "Create Helm chart and deploy to Kubernetes.",
+        "assignee_role": "devops",
+        "priority": 7,
+        "dependencies": [
+            "Security Scan",
+            "Pen Test Auth"
         ]
     }
 ]

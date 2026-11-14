@@ -38,12 +38,24 @@ def get_active_agent_role() -> str:
     """Gets the active agent role for the current execution context."""
     return CURRENT_AGENT_ROLE.get()
 
+def _safe_project_id(pid: Any) -> Optional[int]:
+    """Safely parses project_id to int, returning None if string/UUID."""
+    if pid is None:
+        return None
+    try:
+        return int(pid)
+    except (ValueError, TypeError):
+        return None
+
 async def _save_tool_log(project_id: str, tool_name: str, msg: str, agent_role: str = ""):
+    proj_int = _safe_project_id(project_id)
+    if proj_int is None:
+        return
     from backend.database import async_session_maker
     from backend.models import AgentLogModel, Workflow
     from sqlalchemy import select
     async with async_session_maker() as db:
-        stmt = select(Workflow).where(Workflow.project_id == int(project_id))
+        stmt = select(Workflow).where(Workflow.project_id == proj_int)
         wf = (await db.execute(stmt)).scalars().first()
         if wf:
             effective_role = agent_role or get_active_agent_role() or wf.next_agent or wf.current_state or "tool_execution"
@@ -59,11 +71,14 @@ async def _save_tool_log(project_id: str, tool_name: str, msg: str, agent_role: 
             await db.commit()
 
 async def _save_terminal_log(project_id: str, payload_extra: dict):
+    proj_int = _safe_project_id(project_id)
+    if proj_int is None:
+        return
     from backend.database import async_session_maker
     from backend.models import CommandExecution, Workflow
     from sqlalchemy import select
     async with async_session_maker() as db:
-        stmt = select(Workflow).where(Workflow.project_id == int(project_id))
+        stmt = select(Workflow).where(Workflow.project_id == proj_int)
         wf = (await db.execute(stmt)).scalars().first()
         if wf:
             cmd = payload_extra.get("command", "")
@@ -71,7 +86,7 @@ async def _save_terminal_log(project_id: str, payload_extra: dict):
             stderr = payload_extra.get("stderr", "")
             exit_code = payload_extra.get("exit_code", 0)
             log_entry = CommandExecution(
-                project_id=int(project_id),
+                project_id=proj_int,
                 command=cmd,
                 stdout=stdout,
                 stderr=stderr,
@@ -184,35 +199,39 @@ def broadcast_subgraph_node(sub_node: str, thread_id: str = ""):
                         update_vals["current_state"] = parent_stage
 
                         # Ensure parent_stage is added to completed_nodes if missing
-                        stmt = select(Workflow).where(Workflow.project_id == int(project_id))
-                        wf = (await session.execute(stmt)).scalars().first()
-                        if wf:
-                            import json as _json
-                            try:
-                                completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
-                            except Exception:
-                                completed_list = []
-                            
-                            # Add previous nodes before parent_stage
-                            stage_order = [
-                                "planning_stage", "pm_phase_a_stage", "architect_stage",
-                                "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
-                                "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
-                                "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
-                            ]
-                            if parent_stage in stage_order:
-                                idx = stage_order.index(parent_stage)
-                                for prev_stage in stage_order[:idx]:
-                                    if prev_stage not in completed_list:
-                                        completed_list.append(prev_stage)
-                                update_vals["completed_nodes"] = _json.dumps(completed_list)
+                        proj_int = _safe_project_id(project_id)
+                        if proj_int is not None:
+                            stmt = select(Workflow).where(Workflow.project_id == proj_int)
+                            wf = (await session.execute(stmt)).scalars().first()
+                            if wf:
+                                import json as _json
+                                try:
+                                    completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
+                                except Exception:
+                                    completed_list = []
+                                
+                                # Add previous nodes before parent_stage
+                                stage_order = [
+                                    "planning_stage", "pm_phase_a_stage", "architect_stage",
+                                    "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
+                                    "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
+                                    "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
+                                ]
+                                if parent_stage in stage_order:
+                                    idx = stage_order.index(parent_stage)
+                                    for prev_stage in stage_order[:idx]:
+                                        if prev_stage not in completed_list:
+                                            completed_list.append(prev_stage)
+                                    update_vals["completed_nodes"] = _json.dumps(completed_list)
 
-                    await session.execute(
-                        update(Workflow)
-                        .where(Workflow.project_id == int(project_id))
-                        .values(**update_vals)
-                    )
-                    await session.commit()
+                    proj_int = _safe_project_id(project_id)
+                    if proj_int is not None:
+                        await session.execute(
+                            update(Workflow)
+                            .where(Workflow.project_id == proj_int)
+                            .values(**update_vals)
+                        )
+                        await session.commit()
             loop.create_task(_update_db())
     except RuntimeError:
         if hasattr(ws_manager, 'main_loop') and ws_manager.main_loop:
@@ -225,32 +244,36 @@ def broadcast_subgraph_node(sub_node: str, thread_id: str = ""):
                     update_vals = {"current_subgraph_node": sub_node}
                     if parent_stage:
                         update_vals["current_state"] = parent_stage
-                        stmt = select(Workflow).where(Workflow.project_id == int(project_id))
-                        wf = (await session.execute(stmt)).scalars().first()
-                        if wf:
-                            import json as _json
-                            try:
-                                completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
-                            except Exception:
-                                completed_list = []
-                            stage_order = [
-                                "planning_stage", "pm_phase_a_stage", "architect_stage",
-                                "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
-                                "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
-                                "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
-                            ]
-                            if parent_stage in stage_order:
-                                idx = stage_order.index(parent_stage)
-                                for prev_stage in stage_order[:idx]:
-                                    if prev_stage not in completed_list:
-                                        completed_list.append(prev_stage)
-                                update_vals["completed_nodes"] = _json.dumps(completed_list)
-                    await session.execute(
-                        update(Workflow)
-                        .where(Workflow.project_id == int(project_id))
-                        .values(**update_vals)
-                    )
-                    await session.commit()
+                        proj_int = _safe_project_id(project_id)
+                        if proj_int is not None:
+                            stmt = select(Workflow).where(Workflow.project_id == proj_int)
+                            wf = (await session.execute(stmt)).scalars().first()
+                            if wf:
+                                import json as _json
+                                try:
+                                    completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
+                                except Exception:
+                                    completed_list = []
+                                stage_order = [
+                                    "planning_stage", "pm_phase_a_stage", "architect_stage",
+                                    "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
+                                    "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
+                                    "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
+                                ]
+                                if parent_stage in stage_order:
+                                    idx = stage_order.index(parent_stage)
+                                    for prev_stage in stage_order[:idx]:
+                                        if prev_stage not in completed_list:
+                                            completed_list.append(prev_stage)
+                                    update_vals["completed_nodes"] = _json.dumps(completed_list)
+                    proj_int = _safe_project_id(project_id)
+                    if proj_int is not None:
+                        await session.execute(
+                            update(Workflow)
+                            .where(Workflow.project_id == proj_int)
+                            .values(**update_vals)
+                        )
+                        await session.commit()
             asyncio.run_coroutine_threadsafe(_update_db_threadsafe(), ws_manager.main_loop)
     except Exception:
         pass

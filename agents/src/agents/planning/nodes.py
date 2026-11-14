@@ -74,7 +74,8 @@ def research_node(state: PlanningState) -> dict:
 
     # --- DuckDuckGo web search ---
     from agents.src.shared.llm import safe_web_search
-    web_results = safe_web_search(state.user_req)
+    web_res = safe_web_search(state.user_req)
+    web_results = [web_res] if isinstance(web_res, str) else list(web_res or [])
 
     return {
         "web_search_results": web_results,
@@ -144,12 +145,12 @@ def generate_draft_node(state: PlanningState) -> dict:
 
     formatted = prompt.format(
         user_req=state.user_req,
-        web_search_results="\n\n".join(state.web_search_results) or "No web search results available.",
-        rag_results="\n\n".join(state.rag_results) or "No internal knowledge base results found.",
-        user_clarification_answers=state.user_clarification_answers or "No clarifications provided.",
-        critique_notes=state.critique_notes or "No previous critique.",
-        previous_draft=(state.plan_draft or "No previous draft.")[:6000],
-        user_feedback=state.user_feedback or "No previous feedback.",
+        web_search_results=("\n\n".join(state.web_search_results) or "No web search results available.")[:1500],
+        rag_results=("\n\n".join(state.rag_results) or "No internal knowledge base results found.")[:1500],
+        user_clarification_answers=(state.user_clarification_answers or "No clarifications provided.")[:1500],
+        critique_notes=(state.critique_notes or "No previous critique.")[:1500],
+        previous_draft=(state.plan_draft or "No previous draft.")[:2500],
+        user_feedback=(state.user_feedback or "No previous feedback.")[:1000],
     )
 
     response = _llm_draft.invoke(formatted)

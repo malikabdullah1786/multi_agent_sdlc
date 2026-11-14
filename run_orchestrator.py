@@ -8,7 +8,14 @@ from datetime import datetime
 # Ensure the agents directory is in the python path
 sys.path.append(os.path.abspath("."))
 
-from agents.src.orchestrator.graph import orchestration_graph
+import asyncio
+
+from agents.src.orchestrator.graph import parent_workflow
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+# The graph's nodes are async, so it must be driven via the async API
+# (astream / aget_state) with an async checkpointer. It is compiled in _main().
+orchestration_graph = None
 
 # ─────────────────────────────────────────────────────────────
 # ANSI colour helpers (work on modern Windows terminals)
@@ -448,7 +455,7 @@ def _print_state_update(node_name, state_update):
 # Main orchestrator runner
 # ─────────────────────────────────────────────────────────────
 
-def run_orchestrator():
+async def run_orchestrator():
     global _start_time, _node_counter
 
     _header("AI SDLC ORCHESTRATOR")
@@ -510,7 +517,7 @@ def run_orchestrator():
     config = {"configurable": {"thread_id": thread_id}}
 
     _section("Graph State", color=BLUE)
-    graph_state = orchestration_graph.get_state(config)
+    graph_state = await orchestration_graph.aget_state(config)
     is_resumed  = bool(graph_state.values)
 
     if is_resumed:
@@ -542,7 +549,7 @@ def run_orchestrator():
                     with open(approval_files[0], "r", encoding="utf-8") as f:
                         restored_doc = f.read()
                     # Inject it back into the graph state
-                    orchestration_graph.update_state(config, {"final_design_doc": restored_doc})
+                    await orchestration_graph.aupdate_state(config, {"final_design_doc": restored_doc})
                     print(f"   {GREEN}✓ Restored design doc ({len(restored_doc)} chars) from {approval_files[0]}{RESET}")
                 except Exception as e:
                     print(f"   {RED}Failed to restore design doc: {e}{RESET}")
@@ -578,7 +585,7 @@ def run_orchestrator():
 
         while True:
             # ── Stream graph events ────────────────────────────
-            for event in orchestration_graph.stream(current_input, config=config):
+            async for event in orchestration_graph.astream(current_input, config=config):
                 for node_name, state_update in event.items():
                     _node_counter += 1
                     _log_node_banner(node_name, _node_counter)
@@ -592,7 +599,7 @@ def run_orchestrator():
             print(f"{CYAN}{BOLD}  Checking pipeline state…{RESET}")
             _divider("═", color=CYAN)
 
-            state          = orchestration_graph.get_state(config)
+            state          = await orchestration_graph.aget_state(config)
             has_interrupts = False
             interrupts     = []
 
@@ -709,5 +716,13 @@ def run_orchestrator():
         print(f"\n   {YELLOW}Session preserved — run again and choose Y to resume.{RESET}")
 
 
+async def _main():
+    global orchestration_graph
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
+        await checkpointer.setup()
+        orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)
+        await run_orchestrator()
+
+
 if __name__ == "__main__":
-    run_orchestrator()
+    asyncio.run(_main())

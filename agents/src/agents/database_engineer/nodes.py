@@ -162,10 +162,10 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     existing_code = _get_codebase_summary()
     
     formatted = prompt.format(
-        design_doc=state.final_design_doc,
-        existing_code=existing_code,
-        logs=state.migration_logs or "None.",
-        diff=state.schema_diff_notes or "None."
+        design_doc=(state.final_design_doc or "")[:2200],
+        existing_code=existing_code[:1200],
+        logs=(state.migration_logs or "None.")[:500],
+        diff=(state.schema_diff_notes or "None.")[:500]
     )
     
     formatted += "\n\nCRITICAL: You MUST output ONLY valid JSON matching this schema:\n{\n  \"files\": [\n    {\"path\": \"output/db/init.sql\", \"content\": \"raw code\"}\n  ]\n}\n\nNote: You have FULL terminal and file system access. You can call `run_terminal_command`, `semantic_code_search`, `read_file_range`, `replace_file_content`, `list_directory`, `fetch_server_logs`, `search_web`, and `rag_search` to inspect the workspace or look up documentation. Gather whatever context you need first. Once ready, output your final payload wrapped EXACTLY in a ```json block matching the CodeGenerationResponse schema. DO NOT output anything else after the JSON block."

@@ -231,11 +231,18 @@ def push_to_github(repo_name: str, agent_name: str, context: dict = None) -> dic
         clone_url  = api_res.json().get("clone_url")
         user_login = api_res.json().get("owner", {}).get("login")
         print(f"[{agent_name}] Repository created: {clone_url}")
-    elif api_res.status_code == 422:
-        print(f"[{agent_name}] Repository already exists. Re-using.")
+    elif api_res.status_code in (422, 403):
+        # 422: Repo already exists
+        # 403: Personal Access Token does not have 'Administration' to create new repos,
+        # but can push/commit to existing repos. Check if repo already exists!
         user_res   = requests.get("https://api.github.com/user", headers=headers)
-        user_login = user_res.json().get("login")
+        user_login = user_res.json().get("login") if user_res.status_code == 200 else os.getenv("GITHUB_USERNAME")
         clone_url  = f"https://github.com/{user_login}/{repo_name}.git"
+        check_repo = requests.get(f"https://api.github.com/repos/{user_login}/{repo_name}", headers=headers)
+        if check_repo.status_code == 200:
+            print(f"[{agent_name}] Repository exists: {clone_url}. Re-using.")
+        else:
+            print(f"[{agent_name}] Repo creation returned {api_res.status_code}. Using repo URL: {clone_url}")
     else:
         print(f"[{agent_name}] Failed to create repo: {api_res.status_code} {api_res.text}")
         return {}
