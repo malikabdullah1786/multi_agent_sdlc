@@ -64,58 +64,15 @@ def pop_task_node(state: BackendDevState) -> dict:
         "iteration_count": 0
     }
 
-import subprocess
-from pydantic import BaseModel, Field
-from typing import List
+from agents.src.shared.schemas import GeneratedFile, CodeGenerationResponse
 
-class GeneratedFile(BaseModel):
-    path: str = Field(description="The relative path to save the file to, e.g. src/app/api/v1/contact/route.ts")
-    content: str = Field(description="The full raw code content of the file")
-
-class CodeGenerationResponse(BaseModel):
-    terminal_commands: List[str] = Field(default_factory=list, description="List of shell commands to execute to set up the environment, e.g. ['npm install zod', 'npm install pg']")
-    files: List[GeneratedFile] = Field(description="List of files to generate or update")
+from agents.src.shared.context import build_codebase_context
 
 def _get_codebase_summary() -> str:
-    output_dir = _ROOT_DIR / "output"
-    if not output_dir.exists():
-        return "No generated code found yet."
-        
-    code_blocks = []
-    omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"}
-    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
-    
-    MAX_TOTAL_CHARS = 50000
-    current_total_chars = 0
-    
-    for path in sorted(output_dir.rglob("*")):
-        if path.is_file():
-            if any(part in ignored_dirs for part in path.parts):
-                continue
-            if path.suffix in allowed_extensions:
-                rel_path = path.relative_to(_ROOT_DIR)
-                if current_total_chars >= MAX_TOTAL_CHARS:
-                    omitted_files.append(str(rel_path))
-                    continue
-                    
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    if len(content) > 8000:
-                        content = content[:8000] + "\n... [TRUNCATED] ..."
-                    block = f"File: {rel_path}\n```\n{content}\n```"
-                    code_blocks.append(block)
-                    current_total_chars += len(block)
-                except Exception as e:
-                    code_blocks.append(f"File: {rel_path} (Error: {e})")
-                    
-    if not code_blocks and not omitted_files:
-        return "No files generated yet."
-        
-    res = "\n\n".join(code_blocks)
-    if omitted_files:
-        res += "\n\n### Omitted files due to context limits:\n" + "\n".join(f"- {f}" for f in omitted_files)
-    return res
+    return build_codebase_context(
+        allowed_extensions={".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"},
+        preferred_keywords=("backend", "api", "server", "route", "model", "db"),
+    )
 
 # ---------------------------------------------------------------------------
 # 2. Write Code Node

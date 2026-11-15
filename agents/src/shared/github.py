@@ -4,9 +4,11 @@ import requests
 import stat
 import shutil
 import time
+import threading
 from pathlib import Path
 
 _ROOT_DIR = Path(__file__).resolve().parents[3]
+_GIT_LOCK = threading.Lock()
 
 
 def _build_commit_message(agent_name: str, context: dict) -> str:
@@ -186,6 +188,12 @@ def _build_pr_body(agent_name: str, branch_name: str, context: dict) -> str:
 
 
 def push_to_github(repo_name: str, agent_name: str, context: dict = None) -> dict:
+    """Thread-safe wrapper around _push_to_github_locked to prevent .git/index.lock races."""
+    with _GIT_LOCK:
+        return _push_to_github_locked(repo_name, agent_name, context)
+
+
+def _push_to_github_locked(repo_name: str, agent_name: str, context: dict = None) -> dict:
     """
     Creates a GitHub repo via the API and pushes the output/ directory.
 

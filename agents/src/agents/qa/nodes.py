@@ -6,7 +6,7 @@ Flow:
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry, llm_tool_invoke_with_retry
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field, AliasChoices
 from typing import Dict, Any, List
@@ -52,48 +52,13 @@ class TestAnalysis(BaseModel):
 # ---------------------------------------------------------------------------
 # 1. Generate Test Scripts Node
 # ---------------------------------------------------------------------------
+from agents.src.shared.context import build_codebase_context
+
 def _get_codebase_summary() -> str:
-    output_dir = Path(__file__).resolve().parents[5] / "output"
-    if not output_dir.exists():
-        return "No generated code found yet."
-        
-    code_blocks = []
-    omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"}
-    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
-    
-    import os
-    provider = os.getenv("LLM_PROVIDER", "").lower()
-    MAX_TOTAL_CHARS = 16000 if provider == "ollama" else 40000
-    current_total_chars = 0
-    
-    for path in sorted(output_dir.rglob("*")):
-        if path.is_file():
-            if any(part in ignored_dirs for part in path.parts):
-                continue
-            if path.suffix in allowed_extensions:
-                rel_path = path.relative_to(output_dir.parent)
-                if current_total_chars >= MAX_TOTAL_CHARS:
-                    omitted_files.append(str(rel_path))
-                    continue
-                    
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    if len(content) > 5000:
-                        content = content[:5000] + "\n... [TRUNCATED] ..."
-                    block = f"File: {rel_path}\n```\n{content}\n```"
-                    code_blocks.append(block)
-                    current_total_chars += len(block)
-                except Exception as e:
-                    code_blocks.append(f"File: {rel_path} (Error: {e})")
-                    
-    if not code_blocks and not omitted_files:
-        return "No files generated yet."
-        
-    res = "\n\n".join(code_blocks)
-    if omitted_files:
-        res += "\n\n### Omitted files due to context limits:\n" + "\n".join(f"- {f}" for f in omitted_files)
-    return res
+    return build_codebase_context(
+        allowed_extensions={".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"},
+        preferred_keywords=("test", "spec", "app", "main", "index"),
+    )
 
 # ---------------------------------------------------------------------------
 # 1. Generate Test Scripts Node
@@ -288,7 +253,7 @@ def analyze_failures_node(state: QAState) -> dict:
     formatted = prompt.format(logs=logs)
     try:
         structured_llm = _llm.with_structured_output(TestAnalysis)
-        response = structured_llm.invoke(formatted)
+        response = llm_invoke_with_retry(structured_llm, formatted, label="QA-Analyze")
     except Exception as e:
         print(f"[QA Agent] Structured LLM parsing failed: {e}. Falling back to default bug report.")
         response = TestAnalysis(

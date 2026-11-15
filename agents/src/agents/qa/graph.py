@@ -60,10 +60,8 @@ workflow.add_edge("execute_tests", "analyze_failures")
 workflow.add_edge("analyze_failures", "mark_task_complete")
 workflow.add_edge("mark_task_complete", "pop_task")
 
-import sqlite3
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
-_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-checkpointer = SqliteSaver(_db_conn)
+checkpointer = MemorySaver()
 
 qa_subgraph = workflow.compile(checkpointer=checkpointer)

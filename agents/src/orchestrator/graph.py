@@ -23,15 +23,31 @@ from langgraph.errors import GraphInterrupt
 
 _subgraph_counters = {}
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+import asyncio
+import os
+from agents.src.shared.checkpointer import get_async_checkpointer
+
+_SUBGRAPH_TIMEOUT = int(os.getenv("SUBGRAPH_TIMEOUT_SECONDS", "600"))
+
+async def _stream_subgraph(bound_subgraph, stream_input, config, thread_id: str, print_subtask: bool = False):
+    async def _consume():
+        async for event in bound_subgraph.astream(stream_input, config=config):
+            for sub_node, _ in event.items():
+                if sub_node != "__interrupt__":
+                    from backend.telemetry import broadcast_subgraph_node
+                    broadcast_subgraph_node(sub_node, thread_id)
+                    if print_subtask:
+                        import time
+                        print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+
+    await asyncio.wait_for(_consume(), timeout=_SUBGRAPH_TIMEOUT)
 
 async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
     thread_id = config["configurable"]["thread_id"]
     if thread_id not in _subgraph_counters:
         _subgraph_counters[thread_id] = 0
         
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
-        await checkpointer.setup()
+    async with get_async_checkpointer("checkpoints.sqlite") as checkpointer:
         bound_subgraph = subgraph.builder.compile(checkpointer=checkpointer)
 
         # First, if the subgraph hasn't started at all, run it with initial_input.
@@ -41,11 +57,7 @@ async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
         sub_state = await bound_subgraph.aget_state(config)
         already_has_state = bool(sub_state.values)
         if not already_has_state and not sub_state.next and not (sub_state.tasks and any(t.interrupts for t in sub_state.tasks)):
-            async for event in bound_subgraph.astream(initial_input, config=config):
-                for sub_node, _ in event.items():
-                    if sub_node != "__interrupt__":
-                        from backend.telemetry import broadcast_subgraph_node
-                        broadcast_subgraph_node(sub_node, thread_id)
+            await _stream_subgraph(bound_subgraph, initial_input, config, thread_id)
                 
         local_count = 0
         # Process any interrupts in a loop
@@ -84,23 +96,11 @@ async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
                 _subgraph_counters[thread_id] += 1
                 
                 # Resume the subgraph with the user's response
-                async for event in bound_subgraph.astream(Command(resume=user_response), config=config):
-                    for sub_node, _ in event.items():
-                        if sub_node != "__interrupt__":
-                            from backend.telemetry import broadcast_subgraph_node
-                            broadcast_subgraph_node(sub_node, thread_id)
-                            import time
-                            print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+                await _stream_subgraph(bound_subgraph, Command(resume=user_response), config, thread_id, print_subtask=True)
             else:
                 # has_sub_interrupts is False, but sub_state.next is True
                 # This means the subgraph was interrupted by an error and needs to be retried
-                async for event in bound_subgraph.astream(None, config=config):
-                    for sub_node, _ in event.items():
-                        if sub_node != "__interrupt__":
-                            from backend.telemetry import broadcast_subgraph_node
-                            broadcast_subgraph_node(sub_node, thread_id)
-                            import time
-                            print(f"      ↳ [{time.strftime('%H:%M:%S')}] Sub-task completed: {sub_node}")
+                await _stream_subgraph(bound_subgraph, None, config, thread_id, print_subtask=True)
                         
         final_state = await bound_subgraph.aget_state(config)
         return final_state.values
@@ -189,9 +189,6 @@ async def pm_phase_b_stage(state: WorkflowState) -> dict:
 # DISPATCHER LOOP & WRAPPERS
 # ===========================================================================
 
-# Safety counters to prevent infinite loops (keyed by workflow ID)
-_dispatcher_iteration_count: dict = {}
-_dispatcher_last_dispatch: dict = {}
 MAX_DISPATCHER_ITERATIONS = 50
 
 def dispatcher_stage(state: WorkflowState) -> dict:
@@ -202,14 +199,12 @@ def dispatcher_stage(state: WorkflowState) -> dict:
     import time as _time
     wf_id = state.workflowId
 
-    # ── Safety guard: max iteration count ──────────────────────────────────
-    _dispatcher_iteration_count.setdefault(wf_id, 0)
-    _dispatcher_iteration_count[wf_id] += 1
-    iteration = _dispatcher_iteration_count[wf_id]
+    # ── Safety guard: max iteration count (persisted in WorkflowState) ─────
+    iteration = state.dispatcher_iteration_count + 1
 
     if iteration > MAX_DISPATCHER_ITERATIONS:
         print(f"[SAFETY][{_time.strftime('%H:%M:%S')}] Dispatcher exceeded {MAX_DISPATCHER_ITERATIONS} iterations for workflow {wf_id}. Forcing END.")
-        return {"active_role": "", "active_tasks": []}
+        return {"active_role": "", "active_tasks": [], "dispatcher_iteration_count": iteration}
 
     all_tasks = state.workflow_tasks
     completed = set(state.completed_task_titles)
@@ -230,7 +225,7 @@ def dispatcher_stage(state: WorkflowState) -> dict:
     if not ready_tasks:
         # Either all tasks are done, or there's an unresolvable dependency cycle
         print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] No ready tasks remaining. Ending workflow.")
-        return {"active_role": "", "active_tasks": []}
+        return {"active_role": "", "active_tasks": [], "dispatcher_iteration_count": iteration}
         
     # 2. Tie-breaker precedence
     precedence = ["database_engineer", "devops", "backend", "frontend", "qa", "reviewer", "security"]
@@ -240,22 +235,53 @@ def dispatcher_stage(state: WorkflowState) -> dict:
     # 3. Sort by priority (1 is highest), then by precedence
     ready_tasks.sort(key=lambda x: (x.get("priority", 5), get_precedence(x.get("assignee_role", ""))))
     
-    # 4. Pick the role of the most important ready task
-    chosen_role = ready_tasks[0].get("assignee_role", "")
-    
-    # 5. Gather ALL ready tasks for that chosen role
-    tasks_for_role = [t for t in ready_tasks if t.get("assignee_role", "") == chosen_role]
+    # 4. Group ready tasks by role; if multiple independent roles are ready, run in parallel
+    grouped: dict[str, list[dict]] = {}
+    for t in ready_tasks:
+        r = t.get("assignee_role", "") or "backend"
+        grouped.setdefault(r, []).append(t)
 
-    # ── Safety guard: detect identical re-dispatch (same role + same tasks) ─
+    # Gate/verification roles (qa, reviewer, security) run sequentially after build tasks
+    _SERIAL_ROLES = {"qa", "reviewer", "security"}
+    concurrent_roles = [r for r in grouped if r not in _SERIAL_ROLES]
+
+    if len(concurrent_roles) > 1:
+        parallel_map = {r: grouped[r] for r in concurrent_roles}
+        dispatch_key = "PARALLEL::" + "|".join(
+            f"{r}:{','.join(sorted(t.get('title', '') for t in tasks))}"
+            for r, tasks in sorted(parallel_map.items())
+        )
+        if state.dispatcher_last_dispatch == dispatch_key:
+            print(f"[SAFETY][{_time.strftime('%H:%M:%S')}] Dispatcher would re-dispatch identical parallel batch. Forcing END.")
+            return {"active_role": "", "active_tasks": [], "parallel_tasks_by_role": {}, "dispatcher_iteration_count": iteration}
+        print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] Dispatching PARALLEL batch for roles={list(parallel_map.keys())}")
+        return {
+            "active_role": "parallel_batch",
+            "active_tasks": [t for tasks in parallel_map.values() for t in tasks],
+            "parallel_tasks_by_role": parallel_map,
+            "dispatcher_iteration_count": iteration,
+            "dispatcher_last_dispatch": dispatch_key,
+        }
+
+    # Single role dispatch
+    chosen_role = ready_tasks[0].get("assignee_role", "") or "backend"
+    tasks_for_role = grouped[chosen_role]
+
+    # ── Safety guard: detect identical re-dispatch (persisted in WorkflowState) ─
     dispatch_key = f"{chosen_role}::{'|'.join(sorted(t.get('title', '') for t in tasks_for_role))}"
-    if _dispatcher_last_dispatch.get(wf_id) == dispatch_key:
+    if state.dispatcher_last_dispatch == dispatch_key:
         print(f"[SAFETY][{_time.strftime('%H:%M:%S')}] Dispatcher would re-dispatch identical work: {dispatch_key}. Forcing END to break loop.")
-        return {"active_role": "", "active_tasks": []}
-    _dispatcher_last_dispatch[wf_id] = dispatch_key
+        return {"active_role": "", "active_tasks": [], "parallel_tasks_by_role": {}, "dispatcher_iteration_count": iteration}
 
     print(f"[DISPATCHER][{_time.strftime('%H:%M:%S')}] Dispatching role='{chosen_role}' with {len(tasks_for_role)} task(s): {[t.get('title','') for t in tasks_for_role]}")
     
-    return {"active_role": chosen_role, "active_tasks": tasks_for_role}
+    return {
+        "active_role": chosen_role,
+        "active_tasks": tasks_for_role,
+        "parallel_tasks_by_role": {},
+        "dispatcher_iteration_count": iteration,
+        "dispatcher_last_dispatch": dispatch_key,
+    }
 
 def _dispatcher_router(state: WorkflowState) -> str:
     """Routes execution to the active agent."""
@@ -263,6 +289,8 @@ def _dispatcher_router(state: WorkflowState) -> str:
     if not role:
         return END
         
+    if role == "parallel_batch":
+        return "parallel_batch_stage"
     if role == "backend":
         return "backend_dev_stage"
     if role == "frontend":
@@ -380,6 +408,57 @@ async def reviewer_stage(state: WorkflowState) -> dict:
 async def security_stage(state: WorkflowState) -> dict:
     return await _execute_agent_subgraph(state, security_subgraph, "security")
 
+async def parallel_batch_stage(state: WorkflowState) -> dict:
+    """Executes multiple independent role subgraphs concurrently via asyncio.gather."""
+    import asyncio
+    role_to_subgraph = {
+        "database_engineer": database_engineer_subgraph,
+        "devops": devops_subgraph,
+        "backend": backend_dev_subgraph,
+        "frontend": frontend_dev_subgraph,
+    }
+    batches = state.parallel_tasks_by_role or {}
+    if not batches:
+        return {"active_role": "", "active_tasks": [], "parallel_tasks_by_role": {}}
+
+    async def _run_role(role_name: str, tasks: list[dict]):
+        sub = role_to_subgraph.get(role_name, backend_dev_subgraph)
+        sub_state = state.model_copy(update={"active_tasks": tasks, "active_role": role_name})
+        return await _execute_agent_subgraph(sub_state, sub, role_name)
+
+    results = await asyncio.gather(
+        *[_run_role(r, t) for r, t in batches.items()],
+        return_exceptions=True,
+    )
+
+    merged_completed = list(state.completed_task_titles)
+    merged_tasks = list(state.workflow_tasks)
+    known_titles = {t.get("title", "") for t in merged_tasks if isinstance(t, dict)}
+    active_pr = state.active_pr_number
+
+    for res in results:
+        if isinstance(res, Exception):
+            print(f"[PARALLEL_BATCH] Subgraph error: {res}")
+            continue
+        for title in res.get("completed_task_titles", []):
+            if title not in merged_completed:
+                merged_completed.append(title)
+        for t in res.get("workflow_tasks", []):
+            if isinstance(t, dict) and t.get("title", "") not in known_titles:
+                merged_tasks.append(t)
+                known_titles.add(t.get("title", ""))
+        if res.get("active_pr_number"):
+            active_pr = res["active_pr_number"]
+
+    return {
+        "completed_task_titles": merged_completed,
+        "workflow_tasks": merged_tasks,
+        "active_role": "",
+        "active_tasks": [],
+        "parallel_tasks_by_role": {},
+        "active_pr_number": active_pr,
+    }
+
 # ===========================================================================
 # PARENT GRAPH ASSEMBLY
 # ===========================================================================
@@ -402,6 +481,7 @@ parent_workflow.add_node("frontend_dev_stage", frontend_dev_stage)
 parent_workflow.add_node("qa_stage", qa_stage)
 parent_workflow.add_node("reviewer_stage", reviewer_stage)
 parent_workflow.add_node("security_stage", security_stage)
+parent_workflow.add_node("parallel_batch_stage", parallel_batch_stage)
 
 # ── Linear Setup Phase ──────────────────────────────────────────────────
 parent_workflow.add_edge(START, "planning_stage")
@@ -423,6 +503,7 @@ parent_workflow.add_conditional_edges(
         "qa_stage": "qa_stage",
         "reviewer_stage": "reviewer_stage",
         "security_stage": "security_stage",
+        "parallel_batch_stage": "parallel_batch_stage",
         END: END
     }
 )
@@ -435,10 +516,9 @@ parent_workflow.add_edge("frontend_dev_stage", "dispatcher_stage")
 parent_workflow.add_edge("qa_stage", "dispatcher_stage")
 parent_workflow.add_edge("reviewer_stage", "dispatcher_stage")
 parent_workflow.add_edge("security_stage", "dispatcher_stage")
+parent_workflow.add_edge("parallel_batch_stage", "dispatcher_stage")
 
-import sqlite3
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
-_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-checkpointer = SqliteSaver(_db_conn)
+checkpointer = MemorySaver()
 orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)

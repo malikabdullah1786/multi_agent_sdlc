@@ -183,98 +183,56 @@ def broadcast_subgraph_node(sub_node: str, thread_id: str = ""):
         "timestamp": now_str
     })
     
-    # Fire and forget DB update
+    # Fire and forget DB update via shared coroutine helper
     import asyncio
+
+    async def _persist_subgraph_node():
+        proj_int = _safe_project_id(project_id)
+        if proj_int is None:
+            return
+        from backend.database import AsyncSessionLocal
+        from backend.models import Workflow
+        from sqlalchemy import update, select
+        import json as _json
+
+        async with AsyncSessionLocal() as session:
+            parent_stage = parent_stage_from_thread(thread_id)
+            update_vals = {"current_subgraph_node": sub_node}
+            if parent_stage:
+                update_vals["current_state"] = parent_stage
+                stmt = select(Workflow).where(Workflow.project_id == proj_int)
+                wf = (await session.execute(stmt)).scalars().first()
+                if wf:
+                    try:
+                        completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
+                    except Exception:
+                        completed_list = []
+                    stage_order = [
+                        "planning_stage", "pm_phase_a_stage", "architect_stage",
+                        "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
+                        "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
+                        "qa_stage", "reviewer_stage", "security_stage", "devops_stage",
+                    ]
+                    if parent_stage in stage_order:
+                        idx = stage_order.index(parent_stage)
+                        for prev_stage in stage_order[:idx]:
+                            if prev_stage not in completed_list:
+                                completed_list.append(prev_stage)
+                        update_vals["completed_nodes"] = _json.dumps(completed_list)
+            await session.execute(
+                update(Workflow)
+                .where(Workflow.project_id == proj_int)
+                .values(**update_vals)
+            )
+            await session.commit()
+
     try:
         loop = asyncio.get_running_loop()
         if loop.is_running():
-            async def _update_db():
-                from backend.database import AsyncSessionLocal
-                from backend.models import Workflow
-                from sqlalchemy import update, select
-                async with AsyncSessionLocal() as session:
-                    parent_stage = parent_stage_from_thread(thread_id)
-                    update_vals = {"current_subgraph_node": sub_node}
-                    if parent_stage:
-                        update_vals["current_state"] = parent_stage
-
-                        # Ensure parent_stage is added to completed_nodes if missing
-                        proj_int = _safe_project_id(project_id)
-                        if proj_int is not None:
-                            stmt = select(Workflow).where(Workflow.project_id == proj_int)
-                            wf = (await session.execute(stmt)).scalars().first()
-                            if wf:
-                                import json as _json
-                                try:
-                                    completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
-                                except Exception:
-                                    completed_list = []
-                                
-                                # Add previous nodes before parent_stage
-                                stage_order = [
-                                    "planning_stage", "pm_phase_a_stage", "architect_stage",
-                                    "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
-                                    "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
-                                    "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
-                                ]
-                                if parent_stage in stage_order:
-                                    idx = stage_order.index(parent_stage)
-                                    for prev_stage in stage_order[:idx]:
-                                        if prev_stage not in completed_list:
-                                            completed_list.append(prev_stage)
-                                    update_vals["completed_nodes"] = _json.dumps(completed_list)
-
-                    proj_int = _safe_project_id(project_id)
-                    if proj_int is not None:
-                        await session.execute(
-                            update(Workflow)
-                            .where(Workflow.project_id == proj_int)
-                            .values(**update_vals)
-                        )
-                        await session.commit()
-            loop.create_task(_update_db())
+            loop.create_task(_persist_subgraph_node())
     except RuntimeError:
         if hasattr(ws_manager, 'main_loop') and ws_manager.main_loop:
-            async def _update_db_threadsafe():
-                from backend.database import AsyncSessionLocal
-                from backend.models import Workflow
-                from sqlalchemy import update, select
-                async with AsyncSessionLocal() as session:
-                    parent_stage = parent_stage_from_thread(thread_id)
-                    update_vals = {"current_subgraph_node": sub_node}
-                    if parent_stage:
-                        update_vals["current_state"] = parent_stage
-                        proj_int = _safe_project_id(project_id)
-                        if proj_int is not None:
-                            stmt = select(Workflow).where(Workflow.project_id == proj_int)
-                            wf = (await session.execute(stmt)).scalars().first()
-                            if wf:
-                                import json as _json
-                                try:
-                                    completed_list = _json.loads(wf.completed_nodes) if wf.completed_nodes else []
-                                except Exception:
-                                    completed_list = []
-                                stage_order = [
-                                    "planning_stage", "pm_phase_a_stage", "architect_stage",
-                                    "task_breakdown_stage", "pm_phase_b_stage", "dispatcher_stage",
-                                    "database_engineer_stage", "backend_dev_stage", "frontend_dev_stage",
-                                    "qa_stage", "reviewer_stage", "security_stage", "devops_stage"
-                                ]
-                                if parent_stage in stage_order:
-                                    idx = stage_order.index(parent_stage)
-                                    for prev_stage in stage_order[:idx]:
-                                        if prev_stage not in completed_list:
-                                            completed_list.append(prev_stage)
-                                    update_vals["completed_nodes"] = _json.dumps(completed_list)
-                    proj_int = _safe_project_id(project_id)
-                    if proj_int is not None:
-                        await session.execute(
-                            update(Workflow)
-                            .where(Workflow.project_id == proj_int)
-                            .values(**update_vals)
-                        )
-                        await session.commit()
-            asyncio.run_coroutine_threadsafe(_update_db_threadsafe(), ws_manager.main_loop)
+            asyncio.run_coroutine_threadsafe(_persist_subgraph_node(), ws_manager.main_loop)
     except Exception:
         pass
 

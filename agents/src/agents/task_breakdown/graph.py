@@ -24,11 +24,9 @@ workflow.add_node("generate_tasks", generate_tasks_node)
 workflow.add_edge(START, "generate_tasks")
 workflow.add_edge("generate_tasks", END)
 
-import sqlite3
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
-_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-checkpointer = SqliteSaver(_db_conn)
+checkpointer = MemorySaver()
 
 task_breakdown_subgraph = workflow.compile(checkpointer=checkpointer)
 

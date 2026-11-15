@@ -39,13 +39,7 @@ import subprocess
 import os
 import requests
 
-class GeneratedFile(BaseModel):
-    path: str = Field(description="The relative path to save the file to, e.g. docker-compose.yml")
-    content: str = Field(description="The full raw code content of the file")
-
-class CodeGenerationResponse(BaseModel):
-    terminal_commands: List[str] = Field(default_factory=list, description="List of shell commands to execute")
-    files: List[GeneratedFile] = Field(description="List of files to generate or update")
+from agents.src.shared.schemas import GeneratedFile, CodeGenerationResponse
 
 # ---------------------------------------------------------------------------
 # LLM setup
@@ -55,46 +49,12 @@ _ROOT_DIR = Path(__file__).resolve().parents[4]
 
 _llm = get_llm(temperature=0.1, max_tokens=4000)
 
+from agents.src.shared.context import build_codebase_context
+
 def _get_codebase_summary() -> str:
-    output_dir = _ROOT_DIR / "output"
-    if not output_dir.exists():
-        return "No generated code found yet."
-        
-    code_blocks = []
-    omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html", ".yml", ".yaml", ".toml"}
-    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
-    
-    MAX_TOTAL_CHARS = 40000
-    current_total_chars = 0
-    
-    for path in sorted(output_dir.rglob("*")):
-        if path.is_file():
-            if any(part in ignored_dirs for part in path.parts):
-                continue
-            if path.suffix in allowed_extensions:
-                rel_path = path.relative_to(_ROOT_DIR)
-                if current_total_chars >= MAX_TOTAL_CHARS:
-                    omitted_files.append(str(rel_path))
-                    continue
-                    
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    if len(content) > 5000:
-                        content = content[:5000] + "\n... [TRUNCATED] ..."
-                    block = f"File: {rel_path}\n```\n{content}\n```"
-                    code_blocks.append(block)
-                    current_total_chars += len(block)
-                except Exception as e:
-                    code_blocks.append(f"File: {rel_path} (Error: {e})")
-                    
-    if not code_blocks and not omitted_files:
-        return "No files generated yet."
-        
-    res = "\n\n".join(code_blocks)
-    if omitted_files:
-        res += "\n\n### Omitted files due to context limits:\n" + "\n".join(f"- {f}" for f in omitted_files)
-    return res
+    return build_codebase_context(
+        preferred_keywords=("docker", "package.json", "requirements", "pyproject", "main", "index", "env"),
+    )
 
 # ---------------------------------------------------------------------------
 # 1. Generate Deployment Plan Node

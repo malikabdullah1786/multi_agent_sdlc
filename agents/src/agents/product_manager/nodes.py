@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry, needs_external_research
 from langgraph.types import interrupt
 
 from agents.src.agents.product_manager.state import ProductManagerState
@@ -49,17 +49,7 @@ def research_node(state: ProductManagerState) -> dict:
     Performs web search for competitor analysis and RAG search for past PRDs.
     Optionally skips this if the request is for a generic new project.
     """
-    from langchain_core.prompts import PromptTemplate
-    decision_prompt = PromptTemplate.from_template(
-        "Does this user request require researching an existing internal codebase or finding external web documentation? "
-        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
-    )
-    decision = llm_invoke_with_retry(_llm, decision_prompt.format(req=state.user_req)).content.strip().upper()
-    
-    import re
-    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
-    
-    if "YES" not in decision:
+    if not needs_external_research(state.user_req):
         return {"web_search_results": ["Skipped web search for new generic project.", "Skipped internal RAG search for new generic project."]}
 
     # Web search (DuckDuckGo)
@@ -97,8 +87,7 @@ def write_prd_node(state: ProductManagerState) -> dict:
         user_feedback=state.user_feedback or "No previous feedback.",
     )
 
-    llm_with_tools = _llm.bind_tools([rag_search, create_jira_epic, create_jira_tickets, create_slack_channel])
-    response = llm_invoke_with_retry(llm_with_tools, formatted)
+    response = llm_invoke_with_retry(_llm, formatted, label="PM-PRD")
     content = response.content
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {

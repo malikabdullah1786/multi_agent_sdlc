@@ -122,11 +122,9 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("finalize", END)
 
-import sqlite3
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
-_db_conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
-checkpointer = SqliteSaver(_db_conn)
+checkpointer = MemorySaver()
 
 planning_subgraph = workflow.compile(checkpointer=checkpointer)
 

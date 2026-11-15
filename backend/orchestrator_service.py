@@ -23,6 +23,18 @@ _active_pipelines = set()
 
 class OrchestratorService:
     @staticmethod
+    async def recover_stale_workflows():
+        """Marks any workflows left in RUNNING after an unclean shutdown as PAUSED."""
+        from sqlalchemy import update
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(Workflow)
+                .where(Workflow.status == "RUNNING")
+                .values(status="PAUSED")
+            )
+            await db.commit()
+
+    @staticmethod
     async def run_pipeline_task(project_id: int, thread_id: str, user_req: str, resume_feedback: Optional[str] = None):
         """Asynchronously runs or resumes the LangGraph orchestration graph stream and syncs with DB & WebSockets."""
         
@@ -41,8 +53,8 @@ class OrchestratorService:
                 try:
                     # Use eagerly loaded graph & checkpointer
 
-                    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
-                        await checkpointer.setup()
+                    from agents.src.shared.checkpointer import get_async_checkpointer
+                    async with get_async_checkpointer("checkpoints.sqlite") as checkpointer:
                         orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)
 
                         config = {"configurable": {"thread_id": thread_id}}

@@ -42,7 +42,12 @@ async def lifespan(app: FastAPI):
     """Lifecycle manager to initialize database tables on startup."""
     import asyncio
     from backend.websocket_manager import ws_manager
+    from backend.orchestrator_service import OrchestratorService
     ws_manager.main_loop = asyncio.get_running_loop()
+    try:
+        await OrchestratorService.recover_stale_workflows()
+    except Exception:
+        pass
     
     logger.info("Initializing AgenticDB tables...")
     async with engine.begin() as conn:

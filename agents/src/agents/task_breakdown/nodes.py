@@ -8,7 +8,7 @@ import json
 from typing import List
 from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry
 
 from agents.src.agents.task_breakdown.state import TaskBreakdownState
 
@@ -51,22 +51,7 @@ def generate_tasks_node(state: TaskBreakdownState) -> dict:
             design=(state.final_design_doc or "")[:6000]
         )
         
-        # Retry up to 5 times to handle TPM rate limit cooldowns
-        import time
-        response = None
-        for attempt in range(5):
-            try:
-                response = _llm.invoke(formatted)
-                break
-            except Exception as e:
-                if "429" in str(e) or "rate_limit" in str(e).lower():
-                    wait = 15 * (attempt + 1)
-                    print(f"[Task Breakdown] Rate limited. Retrying in {wait}s...")
-                    time.sleep(wait)
-                else:
-                    raise e
-        if response is None:
-            raise RuntimeError("Task generation failed after 5 retries due to rate limiting.")
+        response = llm_invoke_with_retry(_llm, formatted, label="TaskBreakdown")
         
         # Extract JSON using regex in case there's markdown
         import re, json

@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import time
+import argparse
 from datetime import datetime
 
 # Ensure the agents directory is in the python path
@@ -11,7 +12,19 @@ sys.path.append(os.path.abspath("."))
 import asyncio
 
 from agents.src.orchestrator.graph import parent_workflow
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+
+def _parse_cli_args():
+    parser = argparse.ArgumentParser(description="AI SDLC Orchestrator")
+    parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        default=os.getenv("AUTO_APPROVE", "").lower() in ("1", "true", "yes"),
+        help="Automatically answer clarifying questions and approve all human-in-the-loop gates.",
+    )
+    parser.add_argument("--new", action="store_true", help="Start a new session even if one is saved.")
+    parser.add_argument("--prompt", type=str, default="", help="Project requirement prompt for a new session.")
+    return parser.parse_args()
 
 # The graph's nodes are async, so it must be driven via the async API
 # (astream / aget_state) with an async checkpointer. It is compiled in _main().
@@ -455,7 +468,7 @@ def _print_state_update(node_name, state_update):
 # Main orchestrator runner
 # ─────────────────────────────────────────────────────────────
 
-async def run_orchestrator():
+async def run_orchestrator(auto_approve: bool = False, force_new: bool = False, cli_prompt: str = ""):
     global _start_time, _node_counter
 
     _header("AI SDLC ORCHESTRATOR")
@@ -487,10 +500,16 @@ async def run_orchestrator():
 
     if thread_id:
         status_label2 = "[COMPLETED]" if completed else "[IN PROGRESS]"
-        resume = input(
-            f"\n{YELLOW}Session found: {status_label2} '{(user_req or '')[:55]}…'\n"
-            f"Resume this session? (Y/n): {RESET}"
-        ).strip().lower()
+        if force_new:
+            resume = "n"
+        elif auto_approve:
+            resume = "y"
+            print(f"\n   {GREEN}[AUTO-APPROVE] Resuming saved session {thread_id}.{RESET}")
+        else:
+            resume = input(
+                f"\n{YELLOW}Session found: {status_label2} '{(user_req or '')[:55]}…'\n"
+                f"Resume this session? (Y/n): {RESET}"
+            ).strip().lower()
         if resume == "n":
             thread_id = user_req = None
             completed = False
@@ -498,7 +517,12 @@ async def run_orchestrator():
 
     if not thread_id:
         print()
-        user_req = input(f"{CYAN}What would you like to build today?\n{GRAY}(Press Enter for default To-Do app)\n{WHITE}> {RESET}")
+        if cli_prompt:
+            user_req = cli_prompt
+        elif auto_approve:
+            user_req = "Create a fully functional to-do list web app with a React frontend and an Express/PostgreSQL backend."
+        else:
+            user_req = input(f"{CYAN}What would you like to build today?\n{GRAY}(Press Enter for default To-Do app)\n{WHITE}> {RESET}")
         if not user_req.strip():
             user_req = "Create a fully functional to-do list web app with a React frontend and an Express/PostgreSQL backend."
         thread_id = str(uuid.uuid4())
@@ -687,9 +711,20 @@ async def run_orchestrator():
                         print(draft_content[:500])
 
                 print()
-                user_feedback = input(
-                    f"{YELLOW}Your response {GRAY}(press Enter to approve, or type feedback){RESET}: "
-                )
+                if auto_approve:
+                    if doc_type == "clarifying_questions":
+                        user_feedback = (
+                            "Use sensible modern defaults: responsive web app, clean minimal UI, "
+                            "open-source zero-budget stack, and proceed autonomously."
+                        )
+                        print(f"   {GREEN}[AUTO-APPROVE] Answered clarifying questions automatically.{RESET}")
+                    else:
+                        user_feedback = ""
+                        print(f"   {GREEN}[AUTO-APPROVE] Approved {doc_type} automatically.{RESET}")
+                else:
+                    user_feedback = input(
+                        f"{YELLOW}Your response {GRAY}(press Enter to approve, or type feedback){RESET}: "
+                    )
                 print(f"\n   {CYAN}Resuming pipeline with your feedback…{RESET}\n")
                 current_input = Command(resume=user_feedback)
 
@@ -718,10 +753,15 @@ async def run_orchestrator():
 
 async def _main():
     global orchestration_graph
-    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as checkpointer:
-        await checkpointer.setup()
+    args = _parse_cli_args()
+    from agents.src.shared.checkpointer import get_async_checkpointer
+    async with get_async_checkpointer("checkpoints.sqlite") as checkpointer:
         orchestration_graph = parent_workflow.compile(checkpointer=checkpointer)
-        await run_orchestrator()
+        await run_orchestrator(
+            auto_approve=args.auto_approve,
+            force_new=args.new,
+            cli_prompt=args.prompt,
+        )
 
 
 if __name__ == "__main__":

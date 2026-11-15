@@ -91,41 +91,16 @@ def setup_db_node(state: DatabaseEngineerState) -> dict:
     return {"db_connection_string": conn_string}
 
 
-from pydantic import BaseModel, Field
-from typing import List
+from agents.src.shared.schemas import GeneratedFile, CodeGenerationResponse
 
-class GeneratedFile(BaseModel):
-    path: str = Field(description="The relative path to save the file to, e.g. output/db/init.sql")
-    content: str = Field(description="The full raw code content of the file")
-
-class CodeGenerationResponse(BaseModel):
-    files: List[GeneratedFile] = Field(description="List of files to generate or update")
+from agents.src.shared.context import build_codebase_context
 
 def _get_codebase_summary() -> str:
-    output_dir = _ROOT_DIR / "output" / "db"
-    if not output_dir.exists():
-        return "No generated database scripts found yet."
-        
-    code_blocks = []
-    allowed_extensions = {".sql", ".prisma", ".json", ".md"}
-    
-    for path in sorted(output_dir.rglob("*")):
-        if path.is_file():
-            if path.suffix in allowed_extensions:
-                try:
-                    rel_path = path.relative_to(_ROOT_DIR)
-                    content = path.read_text(encoding="utf-8")
-                    if len(content) > 10000:
-                        content = content[:10000] + "\n... [TRUNCATED] ..."
-                    block = f"File: {rel_path}\n```sql\n{content}\n```"
-                    code_blocks.append(block)
-                except Exception as e:
-                    code_blocks.append(f"File: {path.name} (Error: {e})")
-                    
-    if not code_blocks:
-        return "No files generated yet."
-        
-    return "\n\n".join(code_blocks)
+    return build_codebase_context(
+        subdir="db",
+        allowed_extensions={".sql", ".prisma", ".json", ".md"},
+        empty_message="No generated database scripts found yet.",
+    )
 
 # ---------------------------------------------------------------------------
 # 2. Write Migrations Node

@@ -46,57 +46,12 @@ def analyze_complexity_node(state: ReviewerState) -> dict:
     report = run_complexity_analysis.invoke({})
     return {"complexity_report": report}
 
+from agents.src.shared.context import build_codebase_context
+
 def _get_code_under_review() -> str:
-    root_dir = Path(__file__).resolve().parents[4]
-    output_dir = root_dir / "output"
-    if not output_dir.exists():
-        return "No generated output code found."
-        
-    code_blocks = []
-    omitted_files = []
-    allowed_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"}
-    ignored_dirs = {"node_modules", ".git", ".next", "dist", "build"}
-    
-    # Establish a maximum character budget for the entire code snippet
-    import os
-    provider = os.getenv("LLM_PROVIDER", "groq").lower()
-    MAX_TOTAL_CHARS = 12000 if provider == "groq" else 60000
-    current_total_chars = 0
-    
-    for path in sorted(output_dir.rglob("*")):
-        if path.is_file():
-            if any(part in ignored_dirs for part in path.parts):
-                continue
-            if path.suffix in allowed_extensions:
-                rel_path = path.relative_to(root_dir)
-                
-                # Check budget before reading
-                if current_total_chars >= MAX_TOTAL_CHARS:
-                    omitted_files.append(str(rel_path))
-                    continue
-                    
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    # Limit individual file size to prevent single file hijacking
-                    if len(content) > 8000:
-                        content = content[:8000] + "\n... [TRUNCATED DUE TO FILE SIZE] ..."
-                    
-                    block = f"File: {rel_path}\n```\n{content}\n```"
-                    code_blocks.append(block)
-                    current_total_chars += len(block)
-                except Exception as e:
-                    code_blocks.append(f"File: {rel_path} (Error reading file: {e})")
-                    
-    if not code_blocks and not omitted_files:
-        return "No source code files found in output directory."
-        
-    result = "\n\n".join(code_blocks)
-    if omitted_files:
-        result += "\n\n### ⚠️ The following files were omitted from this prompt due to context size limits:\n"
-        result += "\n".join(f"- {f}" for f in omitted_files)
-        result += "\n\n*Please advise if the Reviewer needs to inspect these files specifically.*"
-        
-    return result
+    return build_codebase_context(
+        empty_message="No generated output code found.",
+    )
 
 # ---------------------------------------------------------------------------
 # 2. Review Code Node

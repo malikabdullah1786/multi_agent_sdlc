@@ -9,7 +9,7 @@ Flow:
 from pathlib import Path
 import re
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry, needs_external_research
 from langgraph.types import interrupt
 from agents.src.agents.architect.state import ArchitectState
 from agents.src.agents.architect.tools import validate_schema, lint_api_spec
@@ -17,8 +17,8 @@ from agents.src.shared.tools import rag_search
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = get_llm(temperature=0.1, max_tokens=4000)  # For large generation
-_llm_short = get_llm(temperature=0.1, max_tokens=1500)  # For short critiques
+_llm = get_llm(temperature=0.1, max_tokens=4000, tier="heavy")  # For large generation
+_llm_short = get_llm(temperature=0.1, max_tokens=1500, tier="fast")  # For short critiques
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
 def _load_prompt(filename: str) -> str:
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
@@ -32,17 +32,7 @@ def research_node(state: ArchitectState) -> dict:
     Searches for best practices, library docs, and similar past architectures.
     Optionally skips this if the request is for a generic new project.
     """
-    from langchain_core.prompts import PromptTemplate
-    decision_prompt = PromptTemplate.from_template(
-        "Does this user request require researching an existing internal codebase or finding external web documentation? "
-        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
-    )
-    decision = llm_invoke_with_retry(_llm, decision_prompt.format(req=state.user_req)).content.strip().upper()
-    
-    import re
-    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
-    
-    if "YES" not in decision:
+    if not needs_external_research(state.user_req):
         return {
             "web_search_results": ["Skipped web search for new generic project."],
             "rag_results": ["Skipped internal RAG search for new generic project."],
@@ -98,8 +88,7 @@ def design_draft_node(state: ArchitectState) -> dict:
         structure_feedback=state.structure_feedback or "No structure feedback.",
         self_critique=state.self_critique_notes or "No previous critique.",
     )
-    llm_with_tools = _llm.bind_tools([rag_search, validate_schema, lint_api_spec])
-    response = llm_invoke_with_retry(llm_with_tools, formatted)
+    response = llm_invoke_with_retry(_llm, formatted, label="Architect-Draft")
     content = response.content
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
@@ -154,13 +143,17 @@ def self_critique_node(state: ArchitectState) -> dict:
         If the design is complete and production-ready, respond with: DESIGN_COMPLETE
         """
     )
-    response = _llm_short.invoke(critique_prompt.format(
-        user_req=state.user_req,
-        prd=state.prd[:3000] if state.prd else "Not available.",
-        draft=state.system_design_draft,
-        schema_notes=state.schema_validation_notes,
-        api_notes=state.api_validation_notes,
-    ))
+    response = llm_invoke_with_retry(
+        _llm_short,
+        critique_prompt.format(
+            user_req=state.user_req,
+            prd=state.prd[:3000] if state.prd else "Not available.",
+            draft=state.system_design_draft,
+            schema_notes=state.schema_validation_notes,
+            api_notes=state.api_validation_notes,
+        ),
+        label="Architect-Critique",
+    )
     return {"self_critique_notes": response.content.strip()}
 # ---------------------------------------------------------------------------
 # 5. Section Approval Nodes (3 separate interrupts: Schema, API, Structure)

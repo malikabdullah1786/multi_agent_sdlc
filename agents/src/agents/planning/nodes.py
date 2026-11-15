@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from agents.src.shared.llm import get_llm
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry, needs_external_research
 from langchain_core.prompts import PromptTemplate
 from langgraph.types import interrupt
 
@@ -26,11 +26,12 @@ from agents.src.shared.tools import rag_search
 # LLM setup  (swap model / provider to your preference)
 # ---------------------------------------------------------------------------
 
-_llm_draft = get_llm(temperature=0.7, max_tokens=4000)
+_llm_draft = get_llm(temperature=0.7, max_tokens=4000, tier="heavy")
 
 _llm_critique = get_llm(
-    temperature=0.7,
-    max_tokens=4000
+    temperature=0.4,
+    max_tokens=1500,
+    tier="fast",
 )
 
 # ---------------------------------------------------------------------------
@@ -53,16 +54,7 @@ def research_node(state: PlanningState) -> dict:
     Decides whether to perform RAG/web search based on the user request.
     If the request is a simple "create a new project from scratch", skips search to save time.
     """
-    decision_prompt = PromptTemplate.from_template(
-        "Does this user request require researching an existing internal codebase or finding external web documentation? "
-        "Reply with ONLY 'YES' or 'NO'.\n\nRequest: {req}"
-    )
-    decision = _llm_critique.invoke(decision_prompt.format(req=state.user_req)).content.strip().upper()
-    
-    # Strip out any <think> blocks
-    decision = re.sub(r'<think>.*?</think>', '', decision, flags=re.DOTALL).strip()
-    
-    if "YES" not in decision:
+    if not needs_external_research(state.user_req):
         return {
             "web_search_results": ["Skipped web search for new generic project."],
             "rag_results": ["Skipped internal RAG search for new generic project."],
@@ -96,10 +88,10 @@ def clarification_node(state: PlanningState) -> dict:
     """
     prompt_path = _PROMPTS_DIR / "planning_qa.txt"
     clarify_prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
-    response = _llm_critique.invoke(clarify_prompt.format(
+    response = llm_invoke_with_retry(_llm_critique, clarify_prompt.format(
         user_req=state.user_req,
         qa_history=state.user_clarification_answers or "None"
-    ))
+    ), label="Planning-Clarify")
     content = response.content.strip()
 
     # Strip out any <think>...</think> blocks from Qwen before checking for CLEAR
@@ -153,7 +145,7 @@ def generate_draft_node(state: PlanningState) -> dict:
         user_feedback=(state.user_feedback or "No previous feedback.")[:1000],
     )
 
-    response = _llm_draft.invoke(formatted)
+    response = llm_invoke_with_retry(_llm_draft, formatted, label="Planning-Draft")
     content = response.content
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     return {
@@ -174,8 +166,10 @@ def critique_node(state: PlanningState) -> dict:
     template_str = _load_prompt("planning_critique.txt")
     prompt = PromptTemplate.from_template(template_str)
 
-    response = _llm_critique.invoke(
-        prompt.format(user_req=state.user_req, plan_draft=state.plan_draft)
+    response = llm_invoke_with_retry(
+        _llm_critique,
+        prompt.format(user_req=state.user_req, plan_draft=state.plan_draft),
+        label="Planning-Critique",
     )
     critique = response.content.strip()
     return {"critique_notes": critique}
