@@ -549,8 +549,14 @@ async def run_orchestrator(auto_approve: bool = False, force_new: bool = False, 
         completed_so_far = checkpoint_info.get("completed_task_titles", [])
         pending_tasks    = checkpoint_info.get("workflow_tasks", [])
         project_name     = checkpoint_info.get("project_name", "?")
+        from agents.src.shared.workspace import set_active_project_dir
+        active_dir = set_active_project_dir(
+            project_name if project_name and project_name != "?" else (checkpoint_info.get("user_req") or user_req),
+            unique_if_exists=False,
+        )
         print(f"   {GREEN}✓ Resuming from SQLite checkpoint{RESET}")
         _detail("Project name:",     project_name)
+        _detail("Project folder:",   str(active_dir))
         _detail("Tasks completed:",  str(len(completed_so_far)))
         _detail("Tasks remaining:",  str(len(pending_tasks)))
         if pending_tasks:
@@ -580,6 +586,9 @@ async def run_orchestrator(auto_approve: bool = False, force_new: bool = False, 
         # -------------------------------
     else:
         print(f"   {CYAN}▶ Starting fresh pipeline run{RESET}")
+        from agents.src.shared.workspace import set_active_project_dir
+        active_dir = set_active_project_dir(user_req, unique_if_exists=True)
+        _detail("Project folder:", str(active_dir))
         current_input = {
             "user_req":              user_req,
             "workflowId":            thread_id,
@@ -587,7 +596,7 @@ async def run_orchestrator(auto_approve: bool = False, force_new: bool = False, 
             "created_at":            datetime.now(),
             "updated_at":            datetime.now(),
             "prd":                   "",
-            "project_name":          "",
+            "project_name":          active_dir.name,
             "final_design_doc":      "",
             "final_file_changes":    [],
             "agent_logs":            [],

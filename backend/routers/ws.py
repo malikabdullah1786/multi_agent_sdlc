@@ -11,6 +11,8 @@ async def project_events_websocket(websocket: WebSocket, project_id: str):
         while True:
             # Keep connection alive & accept incoming ping/pong or messages
             data = await websocket.receive_text()
+            if data == "ping" or '"ping"' in data:
+                await websocket.send_text('{"event": "PONG", "data": {}}')
     except WebSocketDisconnect:
         ws_manager.disconnect(project_id, websocket)
     except Exception:

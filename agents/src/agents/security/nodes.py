@@ -1,12 +1,12 @@
-"""
-Security Agent — Node Functions
+﻿"""
+Security Agent â€” Node Functions
 
 Flow:
-  pop_task → run_sast → check_deps → analyze_vulnerabilities → enforce_security_gate → mark_task_complete → pop_task
+  pop_task â†’ run_sast â†’ check_deps â†’ analyze_vulnerabilities â†’ enforce_security_gate â†’ mark_task_complete â†’ pop_task
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry, execute_tool_calls
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
@@ -113,9 +113,9 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
     ]
     
     # ReAct Loop
-    for turn in range(15):
+    for turn in range(8):
         try:
-            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Security")
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Security", tools=tools_list)
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -150,14 +150,7 @@ def analyze_vulnerabilities_node(state: SecurityState) -> dict:
             break
             
         tool_map = {tool.name: tool for tool in tools_list}
-        for tool_call in response.tool_calls:
-            name = tool_call["name"]
-            print(f"Agent calling tool: {name} with args {tool_call['args']}")
-            if name in tool_map:
-                result = tool_map[name].invoke(tool_call["args"])
-            else:
-                result = f"Error: Tool {name} not found."
-            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+        messages.extend(execute_tool_calls(response.tool_calls, tool_map, agent_name="Security"))
     
     try:
         # Find the content containing the JSON

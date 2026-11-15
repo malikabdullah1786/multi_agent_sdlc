@@ -154,10 +154,18 @@ def self_critique_node(state: ArchitectState) -> dict:
         ),
         label="Architect-Critique",
     )
-    return {"self_critique_notes": response.content.strip()}
+    from agents.src.shared.llm import extract_text_content
+    return {"self_critique_notes": extract_text_content(response).strip()}
 # ---------------------------------------------------------------------------
 # 5. Section Approval Nodes (3 separate interrupts: Schema, API, Structure)
 # ---------------------------------------------------------------------------
+_APPROVAL_TOKENS = {"approve", "approved", "yes", "yes next", "next", "ok", "lgtm", "proceed", "looks good", "go ahead", "haan", ""}
+
+
+def _is_approved_response(user_response) -> bool:
+    return not user_response or str(user_response).strip().lower() in _APPROVAL_TOKENS
+
+
 def approve_schema_node(state: ArchitectState) -> dict:
     """
     Interrupts the graph and presents ONLY the database schema section
@@ -172,7 +180,7 @@ def approve_schema_node(state: ArchitectState) -> dict:
             "Approve it or provide specific feedback to revise this section."
         ),
     })
-    if not user_response or str(user_response).strip().lower() in ("approve", "yes", "ok", ""):
+    if _is_approved_response(user_response):
         return {"schema_approved": True, "schema_feedback": ""}
     return {"schema_approved": False, "schema_feedback": str(user_response)}
 def approve_api_node(state: ArchitectState) -> dict:
@@ -189,7 +197,7 @@ def approve_api_node(state: ArchitectState) -> dict:
             "Approve it or provide specific feedback to revise this section."
         ),
     })
-    if not user_response or str(user_response).strip().lower() in ("approve", "yes", "ok", ""):
+    if _is_approved_response(user_response):
         return {"api_approved": True, "api_feedback": ""}
     return {"api_approved": False, "api_feedback": str(user_response)}
 def approve_structure_node(state: ArchitectState) -> dict:
@@ -206,7 +214,7 @@ def approve_structure_node(state: ArchitectState) -> dict:
             "Approve it or provide specific feedback to revise this section."
         ),
     })
-    if not user_response or str(user_response).strip().lower() in ("approve", "yes", "ok", ""):
+    if _is_approved_response(user_response):
         return {"structure_approved": True, "structure_feedback": ""}
     return {"structure_approved": False, "structure_feedback": str(user_response)}
 # ---------------------------------------------------------------------------

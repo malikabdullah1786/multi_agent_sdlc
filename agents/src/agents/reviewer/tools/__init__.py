@@ -12,8 +12,7 @@ from pathlib import Path
 # Re-export generic terminal tool so nodes can import it from this package
 from agents.src.shared.tools import run_terminal_command  # noqa: F401
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 
 @tool
@@ -22,7 +21,7 @@ def run_complexity_analysis() -> str:
     Simulates running a static analysis tool over the generated output directory.
     Checks for code complexity, duplicated code, or large files.
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     if not output_dir.exists():
         return "ANALYSIS_FAILED: No output directory found to analyze."
         
@@ -50,7 +49,7 @@ def leave_pr_comment(github_repo_name: str, pr_number: int, comment_body: str, i
     github_token = os.getenv("GITHUB_TOKEN")
     if not github_token:
         # Fallback to local markdown file if no token
-        review_file = _OUTPUT_DIR / "CODE_REVIEW.md"
+        review_file = get_output_dir() / "CODE_REVIEW.md"
         status = "APPROVED" if is_approved else "CHANGES REQUESTED"
         content = f"# PR #{pr_number} Review\n**Status:** {status}\n\n{comment_body}\n"
         review_file.write_text(content, encoding="utf-8")

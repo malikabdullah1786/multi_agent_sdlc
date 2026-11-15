@@ -1,77 +1,79 @@
-**Feasibility Brief**
+### 1. Executive Summary
+This project involves developing a classic, lightweight Bubble Shooter arcade game implemented entirely in Java, utilizing Java Swing for the graphical user interface (GUI). *(Note on terminology: The user prompt mentioned "swing boot," which is clarified to mean Java Swing desktop UI—no Spring Boot backend is required, keeping the application entirely self-contained and client-side.)* The game delivers a nostalgic, snappy casual desktop experience where players aim, shoot, match colored bubbles, manage score tracking, preview upcoming bubbles, and race against a threshold-line game-over condition. The primary value proposition is a robust, offline puzzle game requiring zero external service dependencies, easily executable via a standard Java Runtime Environment (JRE).
 
-**Executive Summary**
-We aim to develop a bubble shooter game for mobile devices, targeting both iOS and Android platforms. The game will cater to a broad audience, including casual gamers, competitive players, and families. Our goal is to create an engaging and enjoyable experience that meets the user's expectations.
+### 2. Project Classification
+- **Complexity**: medium
+- **Project Type**: other
 
-**Project Classification**
+### 3. Constraints Captured
+- Must be written in Java.
+- UI must use Java Swing (addressing and dismissing the "swing boot" typo as standard Java Swing).
+- Must operate locally as a standalone desktop application.
+- Scope includes core bubble shooter mechanics: fixed-size window design, hexagonal/grid-based bubble placement, wall bouncing, vector reflection, collision detection, color-matching, floating cluster detection (flood-fill), score tracking, level/row progression, next-bubble preview, and threshold-line game-over conditions.
+- State management, audio handling, and asset rendering must be cleanly integrated without overcomplicating with external databases.
 
-* **Complexity**: medium
-* **Project Type**: crud
+### 4. Risk Matrix
+- **Risk**: Swing rendering stutter or input lag during high-frequency animation loops (aiming line, moving projectiles).
+  - **Impact**: Medium
+  - **Mitigation**: Implement a custom `javax.swing.Timer` or dedicated game loop thread tied to a fixed target framerate (e.g., 60 FPS) with double buffering (`setDoubleBuffered(true)`) enabled on the main game panel.
+- **Risk**: Complex grid collision detection, vector reflection off walls, and floating bubble cluster isolation (gravity drop logic).
+  - **Impact**: High
+  - **Mitigation**: Use a well-tested matrix coordinate system (offset/axial coordinates for grids) alongside precise vector mathematics for wall bouncing, and implement a standard Breadth-First Search (BFS) flood-fill algorithm to detect floating clusters after bubbles are popped.
+- **Risk**: Thread Safety and Concurrency Conflicts between background game loops and Swing's Event Dispatch Thread (EDT).
+  - **Impact**: High
+  - **Mitigation**: Ensure all UI component state updates and repaints are explicitly dispatched via `SwingUtilities.invokeLater()` or managed directly within the EDT timer callback to prevent `ConcurrentModificationException` and rendering artifacts.
+- **Risk**: Window Scaling and Coordinate Mapping issues causing visual distortion or breaking collision math.
+  - **Impact**: Medium
+  - **Mitigation**: Enforce a fixed-size window or aspect-ratio locked container (`setResizable(false)`) so that custom-painted `JPanel` components, coordinate offsets, and click-to-aim calculations remain consistent.
+- **Risk**: Audio resource locking, latency, or memory leaks using native Java `Clip` APIs in a rapid-fire arcade loop.
+  - **Impact**: Low
+  - **Mitigation**: Preload audio clips into memory upon startup, reuse single audio line instances, or implement a lightweight sound manager wrapper to handle concurrent sound triggers gracefully.
 
-**Constraints Captured**
+### 5. Similar Projects Found
+*No historical projects matched in the internal knowledge base.*
 
-* The game must be developed for both iOS and Android platforms.
-* The target audience is broad, including casual gamers, competitive players, and families.
-* The game should be accessible on both devices, with optimal performance.
-* The budget for this project is not specified, but we will work within the constraints provided.
-* The game should be released within 12 weeks.
+### 6. Recommended Approach
+To successfully build this Java Swing Bubble Shooter, the architecture should be cleanly divided into three distinct layers: Model (game state, grid matrix, bubble objects, score/lives), View (`JFrame`, custom-painted game canvas `JPanel`, sidebar for score and next-bubble preview), and Controller (mouse listeners for aiming, game loop timer for projectile movement and frame updates). 
 
-**Risk Matrix**
-
-* **Risk 1: Platform Compatibility**
-	+ Risk description: Ensuring seamless integration and compatibility between iOS and Android platforms.
-	+ Impact level: Medium
-	+ Concrete mitigation strategy: Conduct thorough testing on both platforms to ensure a smooth user experience.
-* **Risk 2: User Engagement**
-	+ Risk description: Creating a game that retains user engagement and interest over time.
-	+ Impact level: Low
-	+ Concrete mitigation strategy: Incorporate features such as leaderboards, power-ups, and social sharing to encourage user participation.
-* **Risk 3: Budget Constraints**
-	+ Risk description: Working within the constraints of the budget to deliver a high-quality game.
-	+ Impact level: High
-	+ Concrete mitigation strategy: Prioritize features and functionalities that meet the user's expectations while staying within budget.
-
-**Similar Projects Found**
-
-* Similarity score: 80%
-* Recommended starting point: Yes (similar project "Bubble Shooter Game for Mobile Devices")
-
-**Recommended Approach**
-
-To develop a successful bubble shooter game, we recommend the following approach:
-
-1. Conduct user research to understand the target audience's preferences and expectations.
-2. Design a user-friendly interface that is accessible on both iOS and Android devices.
-3. Implement a robust game engine to ensure seamless performance and minimal lag.
-4. Incorporate features such as leaderboards, power-ups, and social sharing to encourage user engagement.
-5. Conduct thorough testing on both platforms to ensure a smooth user experience.
-6. Monitor user feedback and adjust the game accordingly to maintain user engagement.
-
-**Technical Recommendations**
-
-Given the broad audience and the need for optimal performance, we recommend using a specialized game engine such as Unity or Unreal Engine. These engines offer robust features, seamless performance, and are well-suited for mobile game development.
-
-**JSON Block**
+Given the algorithmic requirements, implement a fixed-resolution window to completely bypass UI scaling and coordinate mismatch issues. The core rendering loop should run on a `javax.swing.Timer` ticking at ~60 FPS, updating projectile positions, checking circle-circle collisions against grid nodes and wall boundaries, and triggering Swing's `repaint()` safely. Finally, ensure standard arcade features—such as a visual trajectory/aiming guideline, score tracking, dynamic "next bubble" preview, and a bottom threshold line trigger for game-over states—are baked into the initial architectural design for a complete player experience.
 
 ```json
 {
   "complexity_level": "medium",
-  "project_type": "crud",
+  "project_type": "other",
   "risks": [
-    {"description": "Ensuring seamless integration and compatibility between iOS and Android platforms", "impact": "Medium", "mitigation": "Conduct thorough testing on both platforms to ensure a smooth user experience"},
-    {"description": "Creating a game that retains user engagement and interest over time", "impact": "Low", "mitigation": "Incorporate features such as leaderboards, power-ups, and social sharing to encourage user participation"},
-    {"description": "Working within the constraints of the budget to deliver a high-quality game", "impact": "High", "mitigation": "Prioritize features and functionalities that meet the user's expectations while staying within budget"}
+    {
+      "description": "Swing rendering stutter or input lag during high-frequency animation loops.",
+      "impact": "Medium",
+      "mitigation": "Implement a custom javax.swing.Timer fixed at 60 FPS with double buffering enabled."
+    },
+    {
+      "description": "Complex grid collision detection, wall reflection, and floating cluster isolation.",
+      "impact": "High",
+      "mitigation": "Use offset/axial coordinate matrices, precise vector math for wall bounces, and BFS flood-fill for detached clusters."
+    },
+    {
+      "description": "Thread Safety and Concurrency Conflicts between background loops and Swing EDT.",
+      "impact": "High",
+      "mitigation": "Ensure all UI state updates and repaints occur within EDT timer callbacks or SwingUtilities.invokeLater."
+    },
+    {
+      "description": "Window scaling and coordinate mapping distortion on resize.",
+      "impact": "Medium",
+      "mitigation": "Enforce a fixed window size (setResizable(false)) to lock rendering offsets and collision math."
+    },
+    {
+      "description": "Audio resource locking or latency using native Java Clip APIs.",
+      "impact": "Low",
+      "mitigation": "Preload audio clips into memory on startup and implement a lightweight reusable sound manager."
+    }
   ],
-  "constraints": ["platform compatibility", "budget constraints", "user engagement"]
+  "constraints": [
+    "Must be written in Java",
+    "UI must use Java Swing",
+    "Must operate locally as a standalone desktop application",
+    "Must include core mechanics: fixed window, grid placement, wall bouncing, collision detection, color matching, and flood-fill cluster removal",
+    "Must include arcade features: score tracking, next-bubble preview, and threshold-line game over condition"
+  ]
 }
 ```
-
-**Changes Based on User Feedback**
-
-Based on the user's feedback, we have modified the previous draft to incorporate the following changes:
-
-* Added more specific details about the target audience and game mechanics.
-* Clarified the recommended game engine and its benefits.
-* Emphasized the importance of user research and feedback in the development process.
-
-We hope this revised draft meets the user's expectations and requirements.

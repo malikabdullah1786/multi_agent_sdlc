@@ -11,8 +11,7 @@ import glob
 import re
 from agents.src.shared.tools import run_terminal_command
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 # ---------------------------------------------------------------------------
 # Helper: Detect project type from output/ directory
@@ -43,7 +42,7 @@ def code_linter(file_path: str) -> str:
     Args:
         file_path: Path to the file to lint (relative to output/).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
     
     if stack == "node":
@@ -94,7 +93,7 @@ def run_unit_tests(test_file_path: str) -> str:
     Args:
         test_file_path: Path to the test file (relative to output/).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
     
     commands = {
@@ -132,7 +131,7 @@ def db_schema_inspector(table_name: str) -> str:
     Args:
         table_name: The name of the table to inspect.
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     db_file = output_dir / "db" / "init.sql"
     
     if not db_file.exists():

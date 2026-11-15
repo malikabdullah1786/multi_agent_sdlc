@@ -12,8 +12,7 @@ from pathlib import Path
 # Re-export generic terminal tool so nodes can import it from this package
 from agents.src.shared.tools import run_terminal_command  # noqa: F401
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 @tool
 def run_sast_scanner() -> str:
@@ -21,7 +20,7 @@ def run_sast_scanner() -> str:
     Runs a Static Application Security Testing (SAST) tool.
     Detects Python (bandit) or Node (basic grep for secrets as a fallback).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     
     if (output_dir / "package.json").exists():
         # A simple SAST alternative for node if eslint-plugin-security isn't installed
@@ -47,7 +46,7 @@ def check_dependencies() -> str:
     """
     Runs a Software Composition Analysis (SCA) tool (e.g., npm audit).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     
     if (output_dir / "package.json").exists():
         cmd = "npm audit --audit-level=high"
@@ -70,7 +69,7 @@ def file_security_ticket(cve_title: str, severity: str, mitigation: str) -> str:
     """
     Files a high-priority security ticket directly to a local file (since Jira is mocked).
     """
-    tickets_file = _OUTPUT_DIR / "SECURITY_TICKETS.md"
+    tickets_file = get_output_dir() / "SECURITY_TICKETS.md"
     
     import time
     ticket_id = f"SEC-{int(time.time())}"

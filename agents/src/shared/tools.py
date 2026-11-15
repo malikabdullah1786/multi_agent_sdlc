@@ -3,11 +3,12 @@ Shared Agent Tools — Generic terminal execution tool.
 """
 import subprocess
 from pathlib import Path
+from typing import Any
 from langchain_core.tools import tool as _lc_tool
 import functools
 import json
 
-def agent_tool(*args, **kwargs):
+def agent_tool(*args: Any, **kwargs: Any) -> Any:
     """
     A wrapper around LangChain's @tool decorator that automatically
     broadcasts tool executions to the UI.
@@ -34,17 +35,20 @@ def agent_tool(*args, **kwargs):
 
 tool = agent_tool
 
+from agents.src.shared.workspace import get_output_dir
+
 _ROOT_DIR = Path(__file__).resolve().parents[3]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+
 
 @tool
 def run_terminal_command(command: str) -> str:
     """
-    Executes any generic shell / terminal command inside the project's output directory.
+    Executes any generic shell / terminal command inside the active project directory.
     Args:
         command: The exact shell command line string to execute (e.g. 'npm install axios', 'python script.py').
     """
-    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = get_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Non-blocking non-interactive auto-fix for npm install
     if command.startswith("npm install") and "--legacy-peer-deps" not in command:
@@ -59,19 +63,13 @@ def run_terminal_command(command: str) -> str:
             command = command.replace("rm -rf ", "rmdir /s /q ")
         
     try:
-        res = subprocess.run(
-            command,
-            shell=True,
-            cwd=str(_OUTPUT_DIR),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180
-        )
-        stdout = res.stdout.strip()
-        stderr = res.stderr.strip()
-        
+        from agents.src.shared.proc import run_command_safe
+        returncode, stdout, stderr, timed_out = run_command_safe(command, output_dir, timeout=180)
+        stdout = stdout.strip()
+        stderr = stderr.strip()
+        if timed_out:
+            return f"COMMAND_TIMEOUT: Command '{command}' timed out after 180s and was terminated."
+
         try:
             from backend.telemetry import broadcast_tool_call
             
@@ -83,20 +81,18 @@ def run_terminal_command(command: str) -> str:
                     "command": command,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "exit_code": res.returncode
+                    "exit_code": returncode
                 }
             )
         except Exception:
             pass
 
-        if res.returncode == 0:
+        if returncode == 0:
             output = stdout or stderr or "Command completed with exit code 0."
             return f"COMMAND_SUCCESS ({command}):\n{output[-2000:]}"
         else:
             output = stderr or stdout or "Command failed."
-            return f"COMMAND_FAILED (exit code {res.returncode}):\n{output[-2000:]}"
-    except subprocess.TimeoutExpired:
-        return f"COMMAND_TIMEOUT: Command '{command}' timed out after 180s."
+            return f"COMMAND_FAILED (exit code {returncode}):\n{output[-2000:]}"
     except Exception as e:
         return f"COMMAND_ERROR: {e}"
 
@@ -109,7 +105,7 @@ def list_directory(path: str) -> str:
     Args:
         path: Directory path relative to output/ (e.g., '', 'src', 'src/components'). Use '' for root.
     """
-    target = _OUTPUT_DIR / path.strip("/")
+    target = get_output_dir() / path.strip("/")
     if not target.exists():
         return f"Error: Directory '{path}' does not exist."
     if not target.is_dir():
@@ -137,7 +133,7 @@ def fetch_server_logs(lines: int = 100) -> str:
     Since 'npm run dev' and 'fastapi run' are skipped by run_terminal_command to prevent blocking,
     devops or dev agents can configure daemons to write to server.log, and use this tool to debug runtime errors.
     """
-    log_file = _OUTPUT_DIR / "server.log"
+    log_file = get_output_dir() / "server.log"
     if not log_file.exists():
         return "No server.log file found. Ensure your server command redirects output to server.log (e.g. 'npm run dev > server.log 2>&1 &')."
         
@@ -154,6 +150,48 @@ def fetch_server_logs(lines: int = 100) -> str:
         return f"Error fetching logs: {e}"
 
 
+@tool
+def write_file(file_path: str, content: str) -> str:
+    """
+    Creates or overwrites a file in the active project workspace with full source code.
+    Automatically creates parent directories and updates the UI Explorer in real time.
+    Args:
+        file_path: Path to the file relative to the project root (e.g. 'src/App.tsx' or 'pom.xml').
+        content: Complete, runnable file contents (no placeholders).
+    """
+    clean = (file_path or "").strip().lstrip("/").lstrip("\\")
+    if clean.startswith("output/") or clean.startswith("output\\"):
+        clean = clean[7:]
+    if not clean or ".." in Path(clean).parts:
+        return f"Error: Invalid file path '{file_path}'."
+
+    output_dir = get_output_dir()
+    target = (output_dir / clean).resolve()
+    try:
+        target.relative_to(output_dir.resolve())
+    except ValueError:
+        return f"Error: Path '{file_path}' escapes project workspace."
+
+    try:
+        action = "MODIFIED" if target.exists() else "CREATED"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content or "", encoding="utf-8")
+        rel_p = str(target.relative_to(output_dir.resolve())).replace("\\", "/")
+        try:
+            from backend.telemetry import broadcast_tool_call
+            broadcast_tool_call(
+                "create_file",
+                rel_p,
+                event_type="FILE_CHANGE",
+                payload_extra={"path": rel_p, "action": action, "diff": f"+ {action.title()} {rel_p}"},
+            )
+        except Exception:
+            pass
+        return f"SUCCESS: Wrote {rel_p} ({len(content or '')} chars)."
+    except Exception as e:
+        return f"Error writing file '{file_path}': {e}"
+
+
 import glob
 @tool
 def replace_file_content(file_path: str, target_string: str, replacement_string: str) -> str:
@@ -166,7 +204,7 @@ def replace_file_content(file_path: str, target_string: str, replacement_string:
         target_string: The exact string block to replace.
         replacement_string: The string block to insert in its place.
     """
-    target = _OUTPUT_DIR / file_path
+    target = get_output_dir() / file_path
     if not target.exists():
         return f"Error: File {file_path} does not exist."
         
@@ -196,7 +234,7 @@ def read_file_range(file_path: str, start_line: int, end_line: int) -> str:
         start_line: The line number to start reading from (inclusive).
         end_line: The line number to end reading (inclusive).
     """
-    target = _OUTPUT_DIR / file_path
+    target = get_output_dir() / file_path
     if not target.exists():
         return f"Error: File {file_path} does not exist."
         
@@ -229,7 +267,7 @@ def semantic_code_search(query: str) -> str:
     Args:
         query: What to search for (e.g., 'auth', 'database connection').
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     matches = []
     
     # Common code file extensions

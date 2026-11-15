@@ -7,6 +7,7 @@ PHASE A: PRD Writing
 PHASE B: Jira + Slack (triggered separately after Task Breakdown)
   create_slack_channel_node → create_jira_epic_node → create_jira_tickets_node → notify_slack_node
 """
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -131,9 +132,11 @@ def finalize_prd_node(state: ProductManagerState) -> dict:
     slug = "-".join(words[:4]).strip("-")
     channel_name = f"proj-{slug}"[:80].strip("-")
     
-    # Save the approved PRD to the workspace root
-    workspace_root = Path(__file__).resolve().parents[4]
-    prd_path = workspace_root / "final_prd.md"
+    # Save the approved PRD inside the active project directory
+    from agents.src.shared.workspace import get_artifact_path, ENV_PROJECT_DIR_KEY, set_active_project_dir
+    if not os.environ.get(ENV_PROJECT_DIR_KEY):
+        set_active_project_dir(channel_name)
+    prd_path = get_artifact_path("final_prd.md")
     try:
         prd_path.write_text(state.prd_draft, encoding="utf-8")
     except Exception as e:

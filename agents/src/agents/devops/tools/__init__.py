@@ -10,8 +10,7 @@ import time
 from pathlib import Path
 from agents.src.shared.tools import run_terminal_command
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 @tool
 def validate_iac_config(iac_code: str, config_type: str = "auto") -> str:
@@ -22,7 +21,7 @@ def validate_iac_config(iac_code: str, config_type: str = "auto") -> str:
         iac_code: The raw configuration string.
         config_type: e.g. "docker-compose", "terraform", "kubernetes"
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     
     # Check if docker-compose exists
     if not (output_dir / "docker-compose.yml").exists() and not (output_dir / "docker-compose.yaml").exists():
@@ -52,7 +51,7 @@ def run_deployment(plan: str) -> str:
     Executes the deployment against the physical environment via Docker.
     Note: Usually the graph handles this automatically.
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     try:
         res = subprocess.run(
             "docker compose up -d --build",
@@ -100,7 +99,7 @@ def push_github_actions(ci_cd_scripts: str) -> str:
     Writes CI/CD pipeline scripts to the .github/workflows directory.
     The main GitHub Push node will handle actually pushing it.
     """
-    workflows_dir = _OUTPUT_DIR / ".github" / "workflows"
+    workflows_dir = get_output_dir() / ".github" / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)
     
     (workflows_dir / "ci.yml").write_text(ci_cd_scripts, encoding="utf-8")

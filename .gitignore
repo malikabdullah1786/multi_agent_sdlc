@@ -69,3 +69,10 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Generated projects & runtime/build artifacts
+projects/
+output/
+target/
+playwright-report/
+test-results/
+

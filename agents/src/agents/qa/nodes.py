@@ -1,12 +1,12 @@
 """
-QA Agent — Node Functions
+QA Agent â€” Node Functions
 
 Flow:
-  pop_task → generate_test_scripts → execute_tests → analyze_results → mark_task_complete → pop_task
+  pop_task â†’ generate_test_scripts â†’ execute_tests â†’ analyze_results â†’ mark_task_complete â†’ pop_task
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_invoke_with_retry, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_invoke_with_retry, llm_tool_invoke_with_retry, execute_tool_calls
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field, AliasChoices
 from typing import Dict, Any, List
@@ -33,7 +33,7 @@ _ROOT_DIR = Path(__file__).resolve().parents[4]
 _llm = get_llm(temperature=0.1, max_tokens=4000)
 
 class BugReport(BaseModel):
-    title: str = Field(description="Short, specific summary of the bug — include the function/method name and what went wrong")
+    title: str = Field(description="Short, specific summary of the bug â€” include the function/method name and what went wrong")
     steps: str = Field(description="Exact steps to reproduce, including the test name and file")
     expected: str = Field(description="The exact value or behaviour that was expected")
     actual: str = Field(description="The exact error message, stack trace excerpt, or wrong value that was observed")
@@ -56,8 +56,11 @@ from agents.src.shared.context import build_codebase_context
 
 def _get_codebase_summary() -> str:
     return build_codebase_context(
-        allowed_extensions={".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html"},
-        preferred_keywords=("test", "spec", "app", "main", "index"),
+        allowed_extensions={
+            ".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html",
+            ".java", ".kt", ".go", ".rs", ".cs", ".xml", ".gradle",
+        },
+        preferred_keywords=("test", "spec", "app", "main", "index", "controller", "view"),
     )
 
 # ---------------------------------------------------------------------------
@@ -70,6 +73,18 @@ def generate_tests_node(state: QAState) -> dict:
     from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
     import re
     import json
+
+    # Playwright E2E only makes sense for web projects. Desktop/CLI/library projects
+    # (e.g. Java Swing) are verified by their own build/test tool in execute_tests_node.
+    from agents.src.shared.workspace import get_output_dir as _qa_out_dir
+    _od = _qa_out_dir()
+    _skip_dirs = {"node_modules", "target", "build", "dist", ".git"}
+    _is_web = (_od / "package.json").exists() or any(
+        not (_skip_dirs & set(p.relative_to(_od).parts)) for p in _od.rglob("index.html")
+    )
+    if not _is_web:
+        print("[QA Agent] Non-web project detected (no package.json / index.html). Skipping Playwright E2E generation.")
+        return {"e2e_test_scripts": ""}
     
     prompt = PromptTemplate.from_template(
         """You are a QA Automation Engineer.
@@ -103,15 +118,15 @@ def generate_tests_node(state: QAState) -> dict:
     tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, run_test_suite, generate_bug_report]
     llm_with_tools = _llm.bind_tools(tools_list)
     
-    messages = [
+    messages: list[Any] = [
         SystemMessage(content="You are a QA Automation Engineer."),
         HumanMessage(content=formatted)
     ]
     
     # ReAct Loop
-    for turn in range(15):
+    for turn in range(8):
         try:
-            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="QA")
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="QA", tools=tools_list)
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -143,18 +158,11 @@ def generate_tests_node(state: QAState) -> dict:
             break
             
         # Check if it accidentally provided the TS block alongside tool calls
-        if response.content and "```typescript" in response.content.lower():
+        if isinstance(response.content, str) and "```typescript" in response.content.lower():
             break
             
         tool_map = {tool.name: tool for tool in tools_list}
-        for tool_call in response.tool_calls:
-            name = tool_call["name"]
-            print(f"Agent calling tool: {name} with args {tool_call['args']}")
-            if name in tool_map:
-                result = tool_map[name].invoke(tool_call["args"])
-            else:
-                result = f"Error: Tool {name} not found."
-            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+        messages.extend(execute_tool_calls(response.tool_calls, tool_map, agent_name="QA"))
     
     # Find the content containing the typescript block
     content = ""
@@ -163,16 +171,21 @@ def generate_tests_node(state: QAState) -> dict:
             content = msg.content
             break
     if not content:
-        content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+        raw_content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+        content = raw_content if isinstance(raw_content, str) else str(raw_content)
         
-    match = re.search(r'```(?:typescript|ts)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+    match = re.search(r'```(?:typescript|ts)\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
     if match:
         test_code = match.group(1).strip()
     else:
-        test_code = content.strip()
+        # The model never produced a test block (e.g. it only listed directories).
+        # Do NOT write tool output / prose into e2e.spec.ts.
+        print("[QA Agent] No TypeScript test block produced. Skipping E2E spec generation.")
+        return {"e2e_test_scripts": ""}
     
-    # Write the test to the output directory
-    output_dir = Path(__file__).resolve().parents[4] / "output"
+    # Write the test to the active project directory
+    from agents.src.shared.workspace import get_output_dir
+    output_dir = get_output_dir()
     
     # Ensure tests directory exists
     test_dir = output_dir / "tests"
@@ -252,8 +265,7 @@ def analyze_failures_node(state: QAState) -> dict:
     
     formatted = prompt.format(logs=logs)
     try:
-        structured_llm = _llm.with_structured_output(TestAnalysis)
-        response = llm_invoke_with_retry(structured_llm, formatted, label="QA-Analyze")
+        response = llm_invoke_with_retry(_llm, formatted, label="QA-Analyze", structured_schema=TestAnalysis)
     except Exception as e:
         print(f"[QA Agent] Structured LLM parsing failed: {e}. Falling back to default bug report.")
         response = TestAnalysis(
@@ -306,7 +318,7 @@ def analyze_failures_node(state: QAState) -> dict:
         time.sleep(1) # Ensure unique IDs
         
     return {
-        "discovered_bugs": [bug.dict() for bug in response.discovered_bugs],
+        "discovered_bugs": [bug.model_dump() for bug in response.discovered_bugs],
         "all_tests_passed": response.all_tests_passed,
         "new_workflow_tasks": new_tasks
     }

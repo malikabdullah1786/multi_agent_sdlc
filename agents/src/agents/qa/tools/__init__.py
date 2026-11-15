@@ -11,8 +11,7 @@ import subprocess
 from pathlib import Path
 from agents.src.shared.tools import run_terminal_command
 
-_ROOT_DIR = Path(__file__).resolve().parents[4]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 @tool
 def api_integration_tester(endpoint: str, method: str, payload: dict = None) -> str:
@@ -39,33 +38,54 @@ def api_integration_tester(endpoint: str, method: str, payload: dict = None) -> 
 @tool
 def run_test_suite() -> str:
     """
-    Executes the automated E2E test suite (e.g., npx playwright test or npm test).
-    Looks for test configurations in the output directory.
+    Executes the project's automated test suite, choosing the command from the detected stack
+    (Maven/Gradle for Java, pytest for Python, npm/Playwright for web projects).
+    Never opens a headed browser and never blocks on interactive prompts.
     """
-    output_dir = _OUTPUT_DIR
-    
-    # Check what kind of tests exist
-    if (output_dir / "playwright.config.ts").exists() or (output_dir / "playwright.config.js").exists():
-        cmd = "npx playwright test --headed --workers=1"
-    elif (output_dir / "package.json").exists():
-        cmd = "npm test"
-    elif (output_dir / "pytest.ini").exists():
-        cmd = "pytest"
+    import json
+    from agents.src.shared.proc import run_command_safe
+
+    output_dir = get_output_dir()
+
+    pkg = output_dir / "package.json"
+    pkg_deps: dict = {}
+    pkg_scripts: dict = {}
+    if pkg.exists():
+        try:
+            pkg_json = json.loads(pkg.read_text(encoding="utf-8"))
+            pkg_deps = {**pkg_json.get("dependencies", {}), **pkg_json.get("devDependencies", {})}
+            pkg_scripts = pkg_json.get("scripts", {}) or {}
+        except Exception:
+            pass
+
+    has_playwright_cfg = (output_dir / "playwright.config.ts").exists() or (output_dir / "playwright.config.js").exists()
+
+    if (output_dir / "pom.xml").exists():
+        cmd = "mvn -q -B test"
+        timeout = 300
+    elif (output_dir / "build.gradle").exists() or (output_dir / "build.gradle.kts").exists():
+        cmd = "gradlew.bat test" if (os.name == "nt" and (output_dir / "gradlew.bat").exists()) else "gradle test"
+        timeout = 300
+    elif has_playwright_cfg and "@playwright/test" in pkg_deps:
+        cmd = "npx --no-install playwright test --workers=1"
+        timeout = 180
+    elif pkg.exists() and pkg_scripts.get("test"):
+        cmd = "npm test --silent"
+        timeout = 180
+    elif (output_dir / "pytest.ini").exists() or (output_dir / "tests").exists() and list(output_dir.rglob("test_*.py")):
+        cmd = "pytest -q"
+        timeout = 180
     else:
         return "TEST_FAILED: No test suite configuration found in the output directory."
-        
+
     try:
-        res = subprocess.run(
-            cmd, shell=True, cwd=str(output_dir),
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
-        )
-        if res.returncode == 0:
-            return f"TEST_EXECUTION_COMPLETE: Tests passed.\n{res.stdout[-1000:]}"
-        else:
-            errors = res.stdout + res.stderr
-            return f"TEST_EXECUTION_FAILED:\n{errors[-2000:]}"
-    except subprocess.TimeoutExpired:
-        return "TEST_EXECUTION_FAILED: Timeout expired."
+        returncode, stdout, stderr, timed_out = run_command_safe(cmd, output_dir, timeout=timeout)
+        if timed_out:
+            return f"TEST_EXECUTION_FAILED: '{cmd}' timed out after {timeout}s and was terminated."
+        if returncode == 0:
+            return f"TEST_EXECUTION_COMPLETE: Tests passed.\n{stdout[-1000:]}"
+        errors = stdout + stderr
+        return f"TEST_EXECUTION_FAILED ({cmd}):\n{errors[-2000:]}"
     except Exception as e:
         return f"TEST_EXECUTION_FAILED: {e}"
 
@@ -80,7 +100,7 @@ def generate_bug_report(title: str, steps: str, expected: str, actual: str) -> s
         expected: Expected behavior based on the PRD.
         actual: Actual behavior observed during testing.
     """
-    bugs_file = _OUTPUT_DIR / "BUGS.md"
+    bugs_file = get_output_dir() / "BUGS.md"
     
     import time
     bug_id = f"BUG-{int(time.time())}"

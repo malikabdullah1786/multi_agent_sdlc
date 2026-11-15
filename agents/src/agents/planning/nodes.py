@@ -87,17 +87,23 @@ def clarification_node(state: PlanningState) -> dict:
     an interrupt so the UI can present questions to the user.
     """
     prompt_path = _PROMPTS_DIR / "planning_qa.txt"
+    # Never loop endlessly once the user has already answered a round of questions
+    if state.user_clarification_answers and "User answered:" in state.user_clarification_answers:
+        return {"clarifying_questions": []}
+
     clarify_prompt = PromptTemplate.from_template(prompt_path.read_text(encoding="utf-8"))
     response = llm_invoke_with_retry(_llm_critique, clarify_prompt.format(
         user_req=state.user_req,
         qa_history=state.user_clarification_answers or "None"
     ), label="Planning-Clarify")
-    content = response.content.strip()
+    from agents.src.shared.llm import extract_text_content
+    content = extract_text_content(response).strip()
 
     # Strip out any <think>...</think> blocks from Qwen before checking for CLEAR
     clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+    clear_token = re.sub(r'[^A-Z]', '', clean_content.upper())
 
-    if clean_content.upper() == "CLEAR":
+    if clear_token == "CLEAR" or clean_content.upper().startswith("CLEAR"):
         return {"clarifying_questions": []}
 
     # Pass the entire conversational response back to the user
@@ -171,7 +177,8 @@ def critique_node(state: PlanningState) -> dict:
         prompt.format(user_req=state.user_req, plan_draft=state.plan_draft),
         label="Planning-Critique",
     )
-    critique = response.content.strip()
+    from agents.src.shared.llm import extract_text_content
+    critique = extract_text_content(response).strip()
     return {"critique_notes": critique}
 
 
@@ -195,8 +202,9 @@ def user_approval_node(state: PlanningState) -> dict:
         ),
     })
 
-    # If the user approves (empty response or explicit "approve"), mark as approved
-    if not user_response or str(user_response).strip().lower() in ("approve", "yes", "ok", ""):
+    # If the user approves (empty response or common approval phrases), mark as approved
+    resp_norm = str(user_response or "").strip().lower()
+    if not resp_norm or resp_norm in ("approve", "approved", "yes", "ok", "lgtm", "proceed", "looks good", "go ahead", "haan"):
         return {"user_feedback": "", "is_approved": True}
 
     # Otherwise capture the feedback for the next revision loop

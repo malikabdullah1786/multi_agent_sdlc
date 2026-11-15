@@ -11,8 +11,7 @@ import glob
 import re
 from agents.src.shared.tools import run_terminal_command
 
-_ROOT_DIR = Path(__file__).resolve().parents[5]
-_OUTPUT_DIR = _ROOT_DIR / "output"
+from agents.src.shared.workspace import get_output_dir
 
 @tool
 def api_schema_fetcher() -> str:
@@ -21,7 +20,7 @@ def api_schema_fetcher() -> str:
     (Next.js, Express, FastAPI, Django, Flask, Spring, Go, etc.)
     to discover available endpoints and their structure.
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     
     api_files = []
     
@@ -98,7 +97,7 @@ def frontend_linter(file_path: str) -> str:
     Args:
         file_path: Path to the file to lint (relative to output/).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
     
     # Only run tsc if tsconfig.json exists
@@ -151,7 +150,7 @@ def run_component_tests(test_file_path: str) -> str:
     Args:
         test_file_path: Path to the test file (relative to output/).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
     
     commands = {
@@ -192,7 +191,7 @@ def visual_browser_check(route_url: str) -> str:
     Args:
         route_url: The local url to check (used for web projects).
     """
-    output_dir = _OUTPUT_DIR
+    output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
     
     commands = {

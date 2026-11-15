@@ -137,7 +137,8 @@ def validate_schema_diff(connection_string: str, design_markdown: str) -> str:
         llm = get_llm(temperature=0.1, max_tokens=4000)
         formatted_prompt = prompt.format(design_markdown=design_markdown, db_schema_text=db_schema_text)
         response = llm.invoke(formatted_prompt)
-        content = response.content.strip()
+        from agents.src.shared.llm import extract_text_content
+        content = extract_text_content(response).strip()
     
         # Strip <think> blocks so we don't pollute the context window on loop
         clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()

@@ -10,7 +10,7 @@ import os
 import re
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry, execute_tool_calls
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -116,7 +116,8 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
         raise ValueError("System Design Document is empty or missing! DB Engineer cannot proceed without a design doc.")
         
     if not _is_db_required(design_doc):
-        readme_path = _ROOT_DIR / "output" / "db" / "README.md"
+        from agents.src.shared.workspace import get_output_dir as _get_out
+        readme_path = _get_out() / "db" / "README.md"
         readme_path.parent.mkdir(parents=True, exist_ok=True)
         readme_path.write_text(
             "# Database\n\nNo database is required for this project.\n\n"
@@ -152,7 +153,7 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     tools_list = [run_terminal_command, semantic_code_search, read_file_range, replace_file_content, list_directory, fetch_server_logs, search_web, rag_search, create_project_database, run_migrations, validate_schema_diff]
     llm_with_tools = _llm.bind_tools(tools_list)
     
-    messages = [
+    messages: list[Any] = [
         SystemMessage(content="You are a Principal Database Engineer. You write sql migrations."),
         HumanMessage(content=formatted)
     ]
@@ -161,7 +162,7 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
     turn_limit = 15
     for turn in range(turn_limit):
         try:
-            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Database Engineer")
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Database Engineer", tools=tools_list)
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -192,18 +193,11 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
             break
             
         # Check if it accidentally provided the JSON block alongside tool calls
-        if response.content and "```json" in response.content:
+        if isinstance(response.content, str) and "```json" in response.content:
             break
             
         tool_map = {tool.name: tool for tool in tools_list}
-        for tool_call in response.tool_calls:
-            name = tool_call["name"]
-            print(f"Agent calling tool: {name} with args {tool_call['args']}")
-            if name in tool_map:
-                result = tool_map[name].invoke(tool_call["args"])
-            else:
-                result = f"Error: Tool {name} not found."
-            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+        messages.extend(execute_tool_calls(response.tool_calls, tool_map, agent_name="Database Engineer"))
 
     try:
         # Find the content containing the JSON
@@ -213,7 +207,8 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
                 content = msg.content
                 break
         if not content:
-            content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            raw_content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
+            content = raw_content if isinstance(raw_content, str) else json.dumps(raw_content)
             
         json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if not json_match:
@@ -226,13 +221,14 @@ def write_migrations_node(state: DatabaseEngineerState) -> dict:
             
         parsed_response = CodeGenerationResponse(**parsed)
         
-        output_dir = _ROOT_DIR / "output"
+        from agents.src.shared.workspace import get_output_dir
+        output_dir = get_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         
         for f in parsed_response.files:
             clean_path = f.path.lstrip("/")
             if clean_path.startswith("output/"): clean_path = clean_path[7:]
-            file_path = _ROOT_DIR / "output" / clean_path
+            file_path = output_dir / clean_path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(f.content, encoding="utf-8")
             print(f"DB Engineer wrote: {f.path}")
@@ -310,5 +306,5 @@ def push_to_github_node(state: DatabaseEngineerState) -> dict:
         "scope":             "db",
         "linter_clean":      None,  # No linter concept for DB migrations
     }
-    res = push_to_github(state.github_repo_name, "Database Engineer", context=context)
+    res = push_to_github(state.github_repo_name or "", "Database Engineer", context=context)
     return {"active_pr_number": res.get("pr_number", 0)}

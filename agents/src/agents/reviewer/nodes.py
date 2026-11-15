@@ -1,12 +1,12 @@
-"""
-Reviewer Agent — Node Functions
+﻿"""
+Reviewer Agent â€” Node Functions
 
 Flow:
-  pop_task → analyze_complexity → review_code → submit_review → mark_task_complete → pop_task
+  pop_task â†’ analyze_complexity â†’ review_code â†’ submit_review â†’ mark_task_complete â†’ pop_task
 """
 from pathlib import Path
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry, execute_tool_calls
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List
 
@@ -106,9 +106,9 @@ def review_code_node(state: ReviewerState) -> dict:
     ]
     
     # ReAct Loop
-    for turn in range(15):
+    for turn in range(8):
         try:
-            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Reviewer")
+            response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Reviewer", tools=tools_list)
         except Exception as e:
             if "tool_calls" in str(e).lower() or "invalid_json" in str(e).lower():
                 import ast
@@ -143,14 +143,7 @@ def review_code_node(state: ReviewerState) -> dict:
             break
             
         tool_map = {tool.name: tool for tool in tools_list}
-        for tool_call in response.tool_calls:
-            name = tool_call["name"]
-            print(f"Agent calling tool: {name} with args {tool_call['args']}")
-            if name in tool_map:
-                result = tool_map[name].invoke(tool_call["args"])
-            else:
-                result = f"Error: Tool {name} not found."
-            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+        messages.extend(execute_tool_calls(response.tool_calls, tool_map, agent_name="Reviewer"))
 
     try:
         # Find the content containing the JSON

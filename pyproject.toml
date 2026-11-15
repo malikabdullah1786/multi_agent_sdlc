@@ -46,3 +46,6 @@ exclude = '''
 profile = "black"
 line_length = 88
 multi_line_output = 3
+
+[tool.pyrefly]
+python-interpreter-path = "C:\\Users\\malik\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\enterprise-ai-sdlc-dJiv9WXx-py3.14\\Scripts\\python.exe"

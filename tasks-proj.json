@@ -1,225 +1,118 @@
 [
     {
-        "title": "Create Users Table",
-        "description": "Define users schema with indexes.",
+        "title": "Setup Maven Project",
         "assignee_role": "database_engineer",
         "priority": 1,
+        "description": "Initialize pom.xml and directory structure.",
         "dependencies": []
     },
     {
-        "title": "Create Todos Table",
-        "description": "Define todos schema with required fields.",
+        "title": "Create Bubble Model",
         "assignee_role": "database_engineer",
         "priority": 1,
+        "description": "Create Bubble and ColorEnum classes.",
         "dependencies": []
     },
     {
-        "title": "Create RefreshTokens Table",
-        "description": "Define refresh token storage schema.",
+        "title": "Build BubbleGrid Matrix",
         "assignee_role": "database_engineer",
         "priority": 1,
+        "description": "Implement hexagonal grid and offset logic.",
         "dependencies": []
     },
     {
-        "title": "Implement Auth API",
-        "description": "Create signup, login, refresh, logout endpoints.",
+        "title": "Build Projectile Physics",
         "assignee_role": "backend",
         "priority": 2,
+        "description": "Implement projectile movement and wall bouncing.",
         "dependencies": [
-            "Create Users Table",
-            "Create Todos Table",
-            "Create RefreshTokens Table"
+            "Create Bubble Model",
+            "Build BubbleGrid Matrix"
         ]
     },
     {
-        "title": "Implement Todos API",
-        "description": "Create CRUD endpoints with JWT protection.",
+        "title": "Implement Collision Logic",
         "assignee_role": "backend",
         "priority": 2,
+        "description": "Handle grid snapping and match-3 BFS checks.",
         "dependencies": [
-            "Create Users Table",
-            "Create Todos Table",
-            "Create RefreshTokens Table"
+            "Build BubbleGrid Matrix",
+            "Build Projectile Physics"
         ]
     },
     {
-        "title": "Add RateLimit Middleware",
-        "description": "Integrate Redis token bucket for rate limiting.",
+        "title": "Build GameState Model",
         "assignee_role": "backend",
         "priority": 2,
+        "description": "Track score, high score, and game over states.",
         "dependencies": [
-            "Create Users Table",
-            "Create Todos Table",
-            "Create RefreshTokens Table"
+            "Build BubbleGrid Matrix"
         ]
     },
     {
-        "title": "Setup Prisma Models",
-        "description": "Map DB schema to Prisma for ORM.",
-        "assignee_role": "backend",
-        "priority": 2,
-        "dependencies": [
-            "Create Users Table",
-            "Create Todos Table",
-            "Create RefreshTokens Table"
-        ]
-    },
-    {
-        "title": "Build Home Screen",
-        "description": "Display task list and filter tabs.",
+        "title": "Build GameCanvas View",
         "assignee_role": "frontend",
         "priority": 3,
+        "description": "Implement double-buffered 60 FPS rendering surface.",
         "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models"
+            "Build Projectile Physics",
+            "Implement Collision Logic"
         ]
     },
     {
-        "title": "Build Task Modal",
-        "description": "Add/edit task UI with validation.",
+        "title": "Build ControlPanel HUD",
         "assignee_role": "frontend",
         "priority": 3,
+        "description": "Create UI overlay for score and next bubble.",
         "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models"
+            "Build GameState Model"
         ]
     },
     {
-        "title": "Build Auth Flow",
-        "description": "Signup/login pages with JWT handling.",
+        "title": "Implement MainFrame and Controller",
         "assignee_role": "frontend",
         "priority": 3,
+        "description": "Wire MVC components into JFrame window.",
         "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models"
+            "Build GameCanvas View",
+            "Build ControlPanel HUD"
         ]
     },
     {
-        "title": "Add UI Validation",
-        "description": "Client-side checks for title length.",
-        "assignee_role": "frontend",
-        "priority": 3,
-        "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models"
-        ]
-    },
-    {
-        "title": "Test Auth Endpoints",
-        "description": "Verify signup, login, token refresh, logout.",
+        "title": "Run Unit and UI Tests",
         "assignee_role": "qa",
         "priority": 4,
+        "description": "Verify physics, collisions, and render stability.",
         "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models",
-            "Build Home Screen",
-            "Build Task Modal",
-            "Build Auth Flow",
-            "Add UI Validation"
+            "Build GameCanvas View",
+            "Implement MainFrame and Controller"
         ]
     },
     {
-        "title": "Test Todo CRUD",
-        "description": "Validate create, read, update, delete operations.",
-        "assignee_role": "qa",
-        "priority": 4,
-        "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models",
-            "Build Home Screen",
-            "Build Task Modal",
-            "Build Auth Flow",
-            "Add UI Validation"
-        ]
-    },
-    {
-        "title": "Test UI Filters",
-        "description": "Ensure filter tabs show correct tasks.",
-        "assignee_role": "qa",
-        "priority": 4,
-        "dependencies": [
-            "Implement Auth API",
-            "Implement Todos API",
-            "Add RateLimit Middleware",
-            "Setup Prisma Models",
-            "Build Home Screen",
-            "Build Task Modal",
-            "Build Auth Flow",
-            "Add UI Validation"
-        ]
-    },
-    {
-        "title": "Code Review Backend",
-        "description": "Review backend code quality and standards.",
+        "title": "Code Review and Refactor",
         "assignee_role": "reviewer",
         "priority": 5,
+        "description": "Review code for clean MVC architecture and memory leaks.",
         "dependencies": [
-            "Test Auth Endpoints",
-            "Test Todo CRUD",
-            "Test UI Filters"
+            "Run Unit and UI Tests"
         ]
     },
     {
-        "title": "Code Review Frontend",
-        "description": "Review frontend components and logic.",
-        "assignee_role": "reviewer",
-        "priority": 5,
-        "dependencies": [
-            "Test Auth Endpoints",
-            "Test Todo CRUD",
-            "Test UI Filters"
-        ]
-    },
-    {
-        "title": "Security Scan",
-        "description": "Run static analysis and dependency checks.",
+        "title": "Security and Performance Audit",
         "assignee_role": "security",
         "priority": 6,
+        "description": "Check CPU usage <5% and GC pause limits.",
         "dependencies": [
-            "Code Review Backend",
-            "Code Review Frontend"
+            "Code Review and Refactor"
         ]
     },
     {
-        "title": "Pen Test Auth",
-        "description": "Perform penetration tests on auth flow.",
-        "assignee_role": "security",
-        "priority": 6,
-        "dependencies": [
-            "Code Review Backend",
-            "Code Review Frontend"
-        ]
-    },
-    {
-        "title": "Setup CI Pipeline",
-        "description": "Configure GitHub Actions for build and test.",
+        "title": "Package Uber-JAR",
         "assignee_role": "devops",
         "priority": 7,
+        "description": "Build executable JAR using Maven Shade Plugin.",
         "dependencies": [
-            "Security Scan",
-            "Pen Test Auth"
-        ]
-    },
-    {
-        "title": "Deploy to K8s",
-        "description": "Create Helm chart and deploy to Kubernetes.",
-        "assignee_role": "devops",
-        "priority": 7,
-        "dependencies": [
-            "Security Scan",
-            "Pen Test Auth"
+            "Security and Performance Audit"
         ]
     }
 ]

@@ -37,10 +37,10 @@ if __name__ == "__main__":
 
     print("Starting Task Breakdown Agent...")
     
-    workspace_root = os.path.join(os.path.dirname(__file__), "../../../../")
+    from agents.src.shared.workspace import get_artifact_path
     
     # Load PRD
-    prd_path = os.path.join(workspace_root, "final_prd.md")
+    prd_path = str(get_artifact_path("final_prd.md"))
     try:
         with open(prd_path, "r", encoding="utf-8") as f:
             prd_content = f.read()
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         prd_content = ""
         
     # Load Design Doc
-    design_path = os.path.join(workspace_root, "final_design.md")
+    design_path = str(get_artifact_path("final_design.md"))
     try:
         with open(design_path, "r", encoding="utf-8") as f:
             design_content = f.read()
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     print("\nTask Breakdown Finished!")
     print(f"Generated {len(tasks)} tasks.")
     
-    output_path = os.path.join(workspace_root, "tasks.json")
+    output_path = str(get_artifact_path("tasks.json"))
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(tasks, f, indent=2)

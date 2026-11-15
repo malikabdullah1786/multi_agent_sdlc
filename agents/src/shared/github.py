@@ -6,6 +6,7 @@ import shutil
 import time
 import threading
 from pathlib import Path
+from typing import Optional
 
 _ROOT_DIR = Path(__file__).resolve().parents[3]
 _GIT_LOCK = threading.Lock()
@@ -187,13 +188,13 @@ def _build_pr_body(agent_name: str, branch_name: str, context: dict) -> str:
     return "\n".join(lines)
 
 
-def push_to_github(repo_name: str, agent_name: str, context: dict = None) -> dict:
+def push_to_github(repo_name: str, agent_name: str, context: Optional[dict] = None) -> dict:
     """Thread-safe wrapper around _push_to_github_locked to prevent .git/index.lock races."""
     with _GIT_LOCK:
         return _push_to_github_locked(repo_name, agent_name, context)
 
 
-def _push_to_github_locked(repo_name: str, agent_name: str, context: dict = None) -> dict:
+def _push_to_github_locked(repo_name: str, agent_name: str, context: Optional[dict] = None) -> dict:
     """
     Creates a GitHub repo via the API and pushes the output/ directory.
 
@@ -216,7 +217,8 @@ def _push_to_github_locked(repo_name: str, agent_name: str, context: dict = None
         print(f"[{agent_name}] GITHUB_TOKEN not found in environment. Skipping GitHub push.")
         return {}
 
-    output_dir = _ROOT_DIR / "output"
+    from agents.src.shared.workspace import get_output_dir
+    output_dir = get_output_dir(ensure_exists=False)
     if not output_dir.exists():
         print(f"[{agent_name}] No output directory found. Skipping GitHub push.")
         return {}

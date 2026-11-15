@@ -4,10 +4,11 @@ from typing import Iterable, Optional, Sequence
 
 _DEFAULT_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json", ".md", ".html",
-    ".yml", ".yaml", ".toml", ".prisma",
+    ".yml", ".yaml", ".toml", ".prisma", ".java", ".kt", ".go", ".rs", ".cs",
+    ".xml", ".gradle", ".vue", ".svelte", ".swift", ".dart",
 }
-_IGNORED_DIRS = {"node_modules", ".git", ".next", "dist", "build", "__pycache__", ".venv"}
-_ROOT_DIR = Path(__file__).resolve().parents[3]
+_IGNORED_DIRS = {"node_modules", ".git", ".next", "dist", "build", "target", "__pycache__", ".venv"}
+from agents.src.shared.workspace import get_output_dir
 
 
 def build_codebase_context(
@@ -23,7 +24,7 @@ def build_codebase_context(
     1. Compact file tree of all matching files under output/ (or output/<subdir>).
     2. File contents prioritized by preferred_keywords up to max_total_chars.
     """
-    base_dir = _ROOT_DIR / "output"
+    base_dir = get_output_dir(ensure_exists=False)
     if subdir:
         base_dir = base_dir / subdir
     if not base_dir.exists():
@@ -56,9 +57,10 @@ def build_codebase_context(
             )
         )
 
+    output_root = get_output_dir(ensure_exists=False)
     tree_lines = ["### File Tree"]
     for p in candidates:
-        rel = p.relative_to(_ROOT_DIR)
+        rel = p.relative_to(output_root)
         try:
             size = p.stat().st_size
         except OSError:
@@ -71,7 +73,7 @@ def build_codebase_context(
     current_chars = len(tree_section)
 
     for path in candidates:
-        rel_path = path.relative_to(_ROOT_DIR)
+        rel_path = path.relative_to(output_root)
         if current_chars >= max_total_chars:
             omitted_files.append(str(rel_path))
             continue

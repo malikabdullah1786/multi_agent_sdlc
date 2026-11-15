@@ -6,13 +6,15 @@ Flow:
   (loops write_code if lint_code or run_tests fail)
 """
 from pathlib import Path
+from typing import Any
 from langchain_core.prompts import PromptTemplate
-from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry
+from agents.src.shared.llm import get_llm, llm_tool_invoke_with_retry, execute_tool_calls, run_tool_loop_with_json_fallback
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from dotenv import load_dotenv
 import json
 import os
 import re
+import subprocess
 
 load_dotenv()
 
@@ -28,6 +30,7 @@ from agents.src.shared.tools import (
     run_terminal_command,
     read_file_range,
     semantic_code_search,
+    write_file,
     replace_file_content,
     search_web,
     rag_search
@@ -39,7 +42,7 @@ _ROOT_DIR = Path(__file__).resolve().parents[4]
 # ---------------------------------------------------------------------------
 # LLM setup
 # ---------------------------------------------------------------------------
-_llm = get_llm(temperature=0.1, max_tokens=4000)
+_llm = get_llm(temperature=0.1, max_tokens=8192)
 
 # ---------------------------------------------------------------------------
 # 1. Pop Task Node
@@ -70,8 +73,11 @@ from agents.src.shared.context import build_codebase_context
 
 def _get_codebase_summary() -> str:
     return build_codebase_context(
-        allowed_extensions={".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json"},
-        preferred_keywords=("backend", "api", "server", "route", "model", "db"),
+        allowed_extensions={
+            ".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".css", ".json",
+            ".java", ".kt", ".go", ".rs", ".cs", ".xml", ".gradle",
+        },
+        preferred_keywords=("backend", "api", "server", "route", "model", "db", "controller", "main"),
     )
 
 # ---------------------------------------------------------------------------
@@ -86,7 +92,8 @@ def write_code_node(state: BackendDevState) -> dict:
     
     # We load the current db schema from output/db/init.sql if it exists
     db_schema = "No database schema found."
-    db_file = _ROOT_DIR / "output" / "db" / "init.sql"
+    from agents.src.shared.workspace import get_output_dir
+    db_file = get_output_dir(ensure_exists=False) / "db" / "init.sql"
     if db_file.exists():
         db_schema = db_file.read_text(encoding="utf-8")
         
@@ -107,16 +114,17 @@ def write_code_node(state: BackendDevState) -> dict:
     from agents.src.shared.tools import run_terminal_command
         
     # Bind tools to the LLM
-    tools_list = [read_file_range, semantic_code_search, search_web, run_terminal_command, db_schema_inspector, replace_file_content, list_directory, fetch_server_logs, code_linter, run_unit_tests, rag_search]
+    tools_list = [write_file, read_file_range, semantic_code_search, search_web, run_terminal_command, db_schema_inspector, replace_file_content, list_directory, fetch_server_logs, code_linter, run_unit_tests, rag_search]
     llm_with_tools = _llm.bind_tools(tools_list)
     
     # Inform the agent it can execute terminal commands, read chunks or search existing code
-    formatted += "\n\nNote: You have FULL generic terminal access. You can call the `run_terminal_command` tool to execute any shell command in the project directory, call `semantic_code_search` to locate code patterns, call `read_file_range` to view files, call `db_schema_inspector` to view schema, or call `search_web` to look up docs. You can use `list_directory` to explore file paths, and `fetch_server_logs` to debug server crashes. Gather whatever context you need first. Once ready, output your final file generation response."
+    formatted += "\n\nPREFERRED WORKFLOW: Use the `write_file(file_path, content)` tool to write each source file directly to disk one by one (e.g. `write_file('src/main/java/.../GameEngine.java', ...)` or `write_file('pom.xml', ...)`). This avoids JSON truncation. After writing all files with `write_file`, output `{\"terminal_commands\": [...], \"files\": []}` as your final JSON."
+    formatted += "\n\nNote: You have FULL generic terminal access via `run_terminal_command`, `write_file` to create/overwrite files, `replace_file_content` for small edits, `read_file_range` to view files, and `list_directory` to explore paths."
     formatted += "\n\nCRITICAL RULE: DO NOT use tool calling for your final JSON output. You MUST output your final JSON directly in your message text response, surrounded by ```json ... ```. If you wrap your final JSON in a tool call (like 'json' or 'CodeGenerationResponse'), it will crash the system."
     if os.name == 'nt':
         formatted += "\n\nOS RULE: The terminal is Windows cmd.exe. DO NOT use Linux commands like `mkdir -p`, `rm -rf`, or `touch`. Use Windows equivalents (e.g., `mkdir` without `-p` to create directories, `del /s /q` or `rmdir /s /q` for deletion). `mkdir` automatically creates intermediate directories in cmd."
         
-    messages = [
+    messages: list[Any] = [
         SystemMessage(content=formatted),
         HumanMessage(content="Start your implementation. You can execute shell commands with `run_terminal_command`, search the codebase with `semantic_code_search`, read files with `read_file_range`, edit files with `replace_file_content`, list directories with `list_directory`, and fetch server logs with `fetch_server_logs`. When done, output the final code JSON as plain text.")
     ]
@@ -124,76 +132,25 @@ def write_code_node(state: BackendDevState) -> dict:
     generated_code_dump = []
     
     try:
-        # Loop for up to 15 turns of tool execution
-        for turn in range(15):
-            try:
-                response = llm_tool_invoke_with_retry(llm_with_tools, messages, agent_name="Backend Dev")
-            except Exception as invoke_e:
-                error_str = str(invoke_e)
-                # Catch Groq tool_use_failed exceptions where it puts the payload in failed_generation
-                if "failed_generation" in error_str:
-                    fg_idx = error_str.find("'failed_generation': '")
-                    if fg_idx != -1:
-                        start_idx = fg_idx + len("'failed_generation': '")
-                        end_idx = error_str.rfind("'}}")
-                        if end_idx == -1 or end_idx <= start_idx:
-                            end_idx = error_str.rfind("'")
-                        try:
-                            raw_fg = error_str[start_idx:end_idx].replace("\\n", "\n").replace("\\'", "'")
-                            failed_gen = json.loads(raw_fg, strict=False)
-                            args = failed_gen.get("arguments", {})
-                            class DummyResponse:
-                                content = json.dumps(args) if isinstance(args, dict) else str(args)
-                                tool_calls = []
-                            response = DummyResponse()
-                        except Exception:
-                            raise invoke_e
-                    else:
-                        raise invoke_e
-                else:
-                    raise invoke_e
-                    
-            if hasattr(response, "messages"):
-                 pass # it's a real response
-            
-            messages.append(response)
-            
-            # If the LLM returned no tool calls, it must be the final JSON response
-            if not getattr(response, "tool_calls", None):
-                break
-                
-            # Check if it accidentally provided the JSON block alongside tool calls
-            if response.content and "```json" in response.content:
-                break
-                
-            # Process tool calls
-            tool_map = {tool.name: tool for tool in tools_list}
-            for tool_call in response.tool_calls:
-                tool_name = tool_call["name"]
-                if tool_name in tool_map:
-                    print(f"Backend Dev calling tool: {tool_name} with args {tool_call['args']}")
-                    result = tool_map[tool_name].invoke(tool_call["args"])
-                    messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
-                else:
-                    print(f"Backend Dev called unknown tool: {tool_name}")
-                    
-        # Find the content containing the JSON
-        final_content = ""
-        for msg in reversed(messages):
-            if hasattr(msg, "content") and isinstance(msg.content, str) and ("```json" in msg.content or "terminal_commands" in msg.content):
-                final_content = msg.content
-                break
-        if not final_content:
-            final_content = messages[-1].content if hasattr(messages[-1], "content") else str(messages[-1])
-        
+        final_content: str = run_tool_loop_with_json_fallback(
+            _llm,
+            tools_list,
+            messages,
+            agent_name="Backend Dev",
+            max_turns=12,
+            nudge_after_turn=8,
+        )
+
         # Now parse final_content as the code JSON response
-        output_dir = _ROOT_DIR / "output"
+        from agents.src.shared.workspace import get_output_dir
+        output_dir = get_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         
         import re
         match = re.search(r'```(?:json)?\s*(.*?)\s*```', final_content, re.DOTALL)
+        content: str
         if match:
-            content = match.group(1)
+            content = str(match.group(1))
         else:
             start = final_content.find('{')
             end = final_content.rfind('}')
@@ -269,8 +226,8 @@ def write_code_node(state: BackendDevState) -> dict:
             file_path = output_dir / clean_path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(file_content, encoding="utf-8")
-            print(f"Backend Dev wrote: {file_path.relative_to(_ROOT_DIR)}")
-            generated_code_dump.append(f"File: {file_path.relative_to(_ROOT_DIR)} written.")
+            print(f"Backend Dev wrote: {os.path.relpath(file_path, _ROOT_DIR)}")
+            generated_code_dump.append(f"File: {os.path.relpath(file_path, _ROOT_DIR)} written.")
             try:
                 from backend.telemetry import broadcast_tool_call
                 rel_p = str(file_path.relative_to(output_dir))
@@ -294,7 +251,11 @@ def lint_code_node(state: BackendDevState) -> dict:
     """
     Runs the syntax linter against the generated code.
     """
-    # Assuming code is written to a temp file via MCP
+    from agents.src.shared.workspace import count_source_files
+    if count_source_files() == 0:
+        msg = "No backend source files were generated yet (only folders/docs exist). Use `write_file` to create the actual source code files."
+        print(f"Backend Dev lint: FAILED ({msg})")
+        return {"linter_errors": msg}
     result = code_linter.invoke({"file_path": "backend/src/temp.py"})
     return {"linter_errors": "" if result == "LINT_PASSED" else result}
 
@@ -349,5 +310,5 @@ def push_to_github_node(state: BackendDevState) -> dict:
         "scope":             "api",
         "linter_clean":      not bool(getattr(state, "linter_errors", "")),
     }
-    res = push_to_github(state.github_repo_name, "Backend Developer Agent", context=context)
+    res = push_to_github(state.github_repo_name or "", "Backend Developer Agent", context=context)
     return {"active_pr_number": res.get("pr_number", 0)}

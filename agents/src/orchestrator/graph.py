@@ -245,7 +245,9 @@ def dispatcher_stage(state: WorkflowState) -> dict:
     _SERIAL_ROLES = {"qa", "reviewer", "security"}
     concurrent_roles = [r for r in grouped if r not in _SERIAL_ROLES]
 
-    if len(concurrent_roles) > 1:
+    # Sequential execution in a single workspace avoids .git lock collisions and API 429 bursts.
+    # Parallel batching can be opted in via SDLC_ENABLE_PARALLEL_BATCH=1.
+    if os.getenv("SDLC_ENABLE_PARALLEL_BATCH") == "1" and len(concurrent_roles) > 1:
         parallel_map = {r: grouped[r] for r in concurrent_roles}
         dispatch_key = "PARALLEL::" + "|".join(
             f"{r}:{','.join(sorted(t.get('title', '') for t in tasks))}"
@@ -331,20 +333,68 @@ async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str
 
     print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] Executing {role_name} with thread_id='{unique_thread_id}' for tasks: {task_titles}")
 
-    # Send only active_tasks to the sub-agent
-    out = await _run_subgraph_with_interrupts(
-        subgraph,
-        {
-            "project_name": state.project_name if state.project_name else state.projectId,
-            "prd": state.prd,
-            "final_design_doc": state.final_design_doc,
-            "source_code_paths": ["/backend", "/frontend"],
-            "workflow_tasks": state.active_tasks,
+    from agents.src.shared.workspace import count_source_files
+    _CODE_WRITERS = {"backend", "frontend"}
+    _CODE_CONSUMERS = {"qa", "reviewer", "security"}
+    no_code_rejection = False
+
+    # QA / Reviewer / Security have nothing to verify on an empty project: skip them
+    # instead of burning LLM turns and falsely approving.
+    if role_name in _CODE_CONSUMERS and count_source_files() == 0:
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} SKIPPED: workspace has no source code files to verify.")
+        return {
+            "completed_task_titles": state.completed_task_titles.copy(),
+            "workflow_tasks": state.workflow_tasks.copy(),
+            "active_role": "",
+            "active_tasks": [],
             "active_pr_number": state.active_pr_number,
-            "github_repo_name": state.github_repo_name
-        },
+        }
+
+    subgraph_input = {
+        "project_name": state.project_name if state.project_name else state.projectId,
+        "prd": state.prd,
+        "final_design_doc": state.final_design_doc,
+        "source_code_paths": ["/backend", "/frontend"],
+        "workflow_tasks": state.active_tasks,
+        "active_pr_number": state.active_pr_number,
+        "github_repo_name": state.github_repo_name
+    }
+
+    async def _safe_run(sg, inp, cfg):
+        """Runs a subgraph; a timeout is reported instead of crashing the whole pipeline."""
+        try:
+            return await _run_subgraph_with_interrupts(sg, inp, cfg)
+        except TimeoutError:
+            print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} TIMED OUT after {_SUBGRAPH_TIMEOUT}s.")
+            return {"__timeout__": True}
+
+    # Send only active_tasks to the sub-agent
+    out = await _safe_run(
+        subgraph,
+        subgraph_input,
         {"configurable": {"thread_id": unique_thread_id}}
     )
+    timed_out = bool(out.get("__timeout__"))
+
+    # ── No-code gate: developers must leave real source files on disk ──────
+    if role_name in _CODE_WRITERS and not timed_out and count_source_files() == 0:
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} produced NO source files (only folders/docs). Retrying once...")
+        out = await _safe_run(
+            subgraph,
+            subgraph_input,
+            {"configurable": {"thread_id": f"{unique_thread_id}-retry"}}
+        )
+        timed_out = bool(out.get("__timeout__"))
+        if count_source_files() == 0:
+            no_code_rejection = True
+            print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} still produced no source files after retry. Task will NOT be marked complete.")
+
+    # A timed-out developer did not finish its work -> reject. A timed-out verification
+    # gate (qa/reviewer/security) is infrastructure trouble, so it is skipped with a warning.
+    if timed_out and role_name in _CODE_WRITERS:
+        no_code_rejection = True
+    if timed_out and role_name in _CODE_CONSUMERS:
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} timed out; continuing without its verdict.")
     
     new_completed = state.completed_task_titles.copy()
     new_global_tasks = state.workflow_tasks.copy()
@@ -352,7 +402,7 @@ async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str
     
     # Check if the agent rejected the work (e.g. reviewer failed)
     # If the sub-agent outputs `code_review_approved: False` or `all_tests_passed: False`, we don't complete the task
-    is_rejected = False
+    is_rejected = no_code_rejection
     if "code_review_approved" in out and not out["code_review_approved"]:
         is_rejected = True
     if "all_tests_passed" in out and not out["all_tests_passed"]:
@@ -371,9 +421,10 @@ async def _execute_agent_subgraph(state: WorkflowState, subgraph, role_name: str
         print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} REJECTED. Tasks NOT marked complete.")
             
     # Pull any newly spawned tasks (e.g., bug fixes, PR revisions)
-    if "new_workflow_tasks" in out and out["new_workflow_tasks"]:
-        new_global_tasks.extend(out["new_workflow_tasks"])
-        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} spawned {len(out['new_workflow_tasks'])} new task(s).")
+    new_tasks = out.get("new_workflow_tasks") if isinstance(out, dict) else None
+    if isinstance(new_tasks, list) and new_tasks:
+        new_global_tasks.extend(new_tasks)
+        print(f"[SUBGRAPH][{_time.strftime('%H:%M:%S')}] {role_name} spawned {len(new_tasks)} new task(s).")
         
     # Capture PR number if Developer agents created one
     if "active_pr_number" in out and out["active_pr_number"]:
@@ -437,8 +488,10 @@ async def parallel_batch_stage(state: WorkflowState) -> dict:
     active_pr = state.active_pr_number
 
     for res in results:
-        if isinstance(res, Exception):
+        if isinstance(res, BaseException):
             print(f"[PARALLEL_BATCH] Subgraph error: {res}")
+            continue
+        if not isinstance(res, dict):
             continue
         for title in res.get("completed_task_titles", []):
             if title not in merged_completed:
