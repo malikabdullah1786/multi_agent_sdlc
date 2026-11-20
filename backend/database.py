@@ -22,6 +22,7 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False
 )
+async_session_maker = AsyncSessionLocal
 
 Base = declarative_base()
 
