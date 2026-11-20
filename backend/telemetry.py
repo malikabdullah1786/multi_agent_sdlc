@@ -167,6 +167,8 @@ def broadcast_subgraph_node(sub_node: str, thread_id: str = ""):
         "mark_task_complete": "✅ Sub-task completed successfully.",
         "pop_task": "📦 Moving to next sub-task in queue...",
         "clarification": "💬 Reviewing project requirement questions...",
+        "ask_clarification": "❓ Awaiting your reply in chat...",
+        "research": "🔎 Gathering technical context and references...",
         "generate_draft": "📝 Drafting feasibility & technical strategy...",
         "critique": "🧐 Conducting peer review & refining strategy...",
         "user_approval": "✋ Awaiting human review & approval...",

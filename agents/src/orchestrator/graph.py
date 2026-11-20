@@ -115,10 +115,12 @@ async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
                 break  # Subgraph is completely finished
                 
             # If the subgraph is paused at a user interaction node (like user_approval),
-            # broadcast this node name to the UI so the active highlight moves to it.
+            # broadcast this node name ONLY for the active (non-replayed) interrupt so
+            # LangGraph replays don't spam duplicate chat/terminal status lines.
             if has_sub_interrupts and sub_state.next:
-                from backend.telemetry import broadcast_subgraph_node
-                broadcast_subgraph_node(sub_state.next[0], thread_id)
+                if local_count >= persisted_count:
+                    from backend.telemetry import broadcast_subgraph_node
+                    broadcast_subgraph_node(sub_state.next[0], thread_id)
 
                 # Subgraph is paused at an interrupt. Bubble interrupt to parent.
                 user_response = interrupt(payload)
