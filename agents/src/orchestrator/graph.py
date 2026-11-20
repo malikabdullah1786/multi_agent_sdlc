@@ -25,7 +25,46 @@ _subgraph_counters = {}
 
 import asyncio
 import os
+import sqlite3
 from agents.src.shared.checkpointer import get_async_checkpointer
+
+
+def _get_persisted_subgraph_counter(thread_id: str, db_path: str = "checkpoints.sqlite") -> int:
+    """Loads persisted interrupt counter for a subgraph thread so restarts never replay consumed interrupts."""
+    if thread_id in _subgraph_counters:
+        return _subgraph_counters[thread_id]
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS subgraph_interrupt_counters (thread_id TEXT PRIMARY KEY, count INTEGER NOT NULL)"
+            )
+            row = conn.execute(
+                "SELECT count FROM subgraph_interrupt_counters WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            val = int(row[0]) if row else 0
+            _subgraph_counters[thread_id] = val
+            return val
+    except Exception:
+        _subgraph_counters[thread_id] = 0
+        return 0
+
+
+def _set_persisted_subgraph_counter(thread_id: str, count: int, db_path: str = "checkpoints.sqlite") -> None:
+    _subgraph_counters[thread_id] = count
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS subgraph_interrupt_counters (thread_id TEXT PRIMARY KEY, count INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO subgraph_interrupt_counters (thread_id, count) VALUES (?, ?) "
+                "ON CONFLICT(thread_id) DO UPDATE SET count = excluded.count",
+                (thread_id, count),
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 _SUBGRAPH_TIMEOUT = int(os.getenv("SUBGRAPH_TIMEOUT_SECONDS", "600"))
 
@@ -44,8 +83,7 @@ async def _stream_subgraph(bound_subgraph, stream_input, config, thread_id: str,
 
 async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
     thread_id = config["configurable"]["thread_id"]
-    if thread_id not in _subgraph_counters:
-        _subgraph_counters[thread_id] = 0
+    persisted_count = _get_persisted_subgraph_counter(thread_id)
         
     async with get_async_checkpointer("checkpoints.sqlite") as checkpointer:
         bound_subgraph = subgraph.builder.compile(checkpointer=checkpointer)
@@ -87,13 +125,14 @@ async def _run_subgraph_with_interrupts(subgraph, initial_input, config):
                 
                 local_count += 1
                 
-                # If we have already streamed this interrupt to the subgraph in memory,
+                # If we have already streamed this interrupt to the subgraph (even across restarts),
                 # skip streaming to avoid breaking the state during LangGraph replays.
-                if local_count <= _subgraph_counters[thread_id]:
+                if local_count <= persisted_count:
                     continue
                     
-                # We haven't streamed this one yet. Stream it!
-                _subgraph_counters[thread_id] += 1
+                # We haven't streamed this one yet. Persist counter & stream it!
+                persisted_count += 1
+                _set_persisted_subgraph_counter(thread_id, persisted_count)
                 
                 # Resume the subgraph with the user's response
                 await _stream_subgraph(bound_subgraph, Command(resume=user_response), config, thread_id, print_subtask=True)
@@ -115,13 +154,29 @@ async def planning_stage(state: WorkflowState) -> dict:
         {"user_req": state.user_req},
         {"configurable": {"thread_id": f"{state.workflowId}-planning"}}
     )
-    updated_req = (out.get("user_req") if isinstance(out, dict) else None) or state.user_req
-    return {"user_req": updated_req}
+    if not isinstance(out, dict):
+        return {"user_req": state.user_req}
+    updated_req = out.get("user_req") or state.user_req
+    return {
+        "user_req": updated_req,
+        "final_plan": out.get("final_plan", ""),
+        "complexity_level": out.get("complexity_level", "medium"),
+        "project_type": out.get("project_type", "other"),
+        "constraints": out.get("constraints", []),
+        "risks": out.get("risks", []),
+    }
 
 async def pm_phase_a_stage(state: WorkflowState) -> dict:
     out = await _run_subgraph_with_interrupts(
         pm_phase_a_subgraph,
-        {"user_req": state.user_req},
+        {
+            "user_req": state.user_req,
+            "final_plan": state.final_plan,
+            "complexity_level": state.complexity_level,
+            "project_type": state.project_type,
+            "constraints": state.constraints,
+            "risks": state.risks,
+        },
         {"configurable": {"thread_id": f"{state.workflowId}-pm_a"}}
     )
     project_name = out.get("project_name", "")

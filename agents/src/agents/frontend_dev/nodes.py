@@ -68,7 +68,10 @@ def pop_task_node(state: FrontendDevState) -> dict:
         "linter_errors": "",
         "test_failures": "",
         "browser_console_errors": "",
-        "iteration_count": 0
+        "iteration_count": 0,
+        "lint_iterations": 0,
+        "test_iterations": 0,
+        "browser_iterations": 0,
     }
 
 # ---------------------------------------------------------------------------
@@ -264,14 +267,14 @@ def lint_code_node(state: FrontendDevState) -> dict:
     if not has_ui_files:
         msg = "No UI source files (.tsx, .jsx, .html, .vue, .svelte, .java, .kt, .swift, .dart) were generated yet. Use `write_file` to create the actual source files."
         print(f"Frontend Dev lint: FAILED ({msg})")
-        return {"linter_errors": msg}
+        return {"linter_errors": msg, "lint_iterations": state.lint_iterations + 1}
 
     passed, errors = verify_project_build(output_dir=output_dir, label="Frontend Dev")
     if passed:
         print("Frontend Dev build check: PASSED")
         return {"linter_errors": ""}
     print(f"Frontend Dev build check: FAILED\n{errors}")
-    return {"linter_errors": errors}
+    return {"linter_errors": errors, "lint_iterations": state.lint_iterations + 1}
 
 # ---------------------------------------------------------------------------
 # 4. Run Tests Node
@@ -312,7 +315,7 @@ def run_tests_node(state: FrontendDevState) -> dict:
         )
         if res.returncode == 0:
             return {"test_failures": ""}
-        return {"test_failures": (res.stdout + res.stderr)[:2000]}
+        return {"test_failures": (res.stdout + res.stderr)[:2000], "test_iterations": state.test_iterations + 1}
     except Exception as e:
         print(f"Frontend Dev tests: skipped ({e})")
         return {"test_failures": ""}
@@ -336,7 +339,7 @@ def browser_check_node(state: FrontendDevState) -> dict:
                 pass
     if errors:
         print(f"Frontend Dev browser check: {errors}")
-        return {"browser_console_errors": "; ".join(errors)}
+        return {"browser_console_errors": "; ".join(errors), "browser_iterations": state.browser_iterations + 1}
     print("Frontend Dev browser check: CLEAN")
     return {"browser_console_errors": ""}
 
