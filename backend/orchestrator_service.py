@@ -114,7 +114,6 @@ class OrchestratorService:
                         import re as _re
                         is_resuming = (resume_feedback is not None) or bool(graph_state.next)
                         existing_path = (getattr(proj_row, "path", None) or "").strip() if proj_row else ""
-<<<<<<< HEAD
                         # If the workspace was originally created from a greeting (e.g. projects/hi-4)
                         # and is still completely empty while the user has now provided a real project description,
                         # migrate the workspace folder to a clean slug matching the real project.
