@@ -83,7 +83,6 @@ def run_unit_tests(test_file_path: str) -> str:
     """
     output_dir = get_output_dir()
     stack = _detect_stack(output_dir)
-<<<<<<< HEAD
 
     if stack == "node":
         import json as _json
